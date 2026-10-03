@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 
 from asm68klint.annotations import parse_annotation
+from asm68klint.directives import code_label
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect
 from asm68klint.header import FIELDS, Field, Header, is_header_start, parse_header
@@ -65,7 +66,7 @@ def find_routines(
     labelled = True  # the last routine has had its label
     while position < len(statements):
         statement = statements[position]
-        is_global = bool(statement.label) and not is_local(statement.label or "")
+        is_global = code_label(statement) is not None
         if is_header_start(statement):
             labelled = False
             end = position + 1

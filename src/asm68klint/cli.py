@@ -9,6 +9,7 @@ from pathlib import Path
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
 from asm68klint.linter import DEFAULT_RESERVED, describe_files, lint_files
+from asm68klint.platforms import PLATFORMS
 from asm68klint.registers import canonical
 from asm68klint.rules import RULES
 
@@ -66,6 +67,19 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        help="the machine the program is for: what its system calls change",
+    )
+    for name, platform in PLATFORMS.items():
+        parser.add_argument(
+            f"--{name}",
+            dest="platform",
+            action="store_const",
+            const=name,
+            help=f"the same as --platform {name}: {platform.summary}",
+        )
+    parser.add_argument(
         "--effects",
         action="store_true",
         help="list what every routine reads and changes, and do not lint",
@@ -94,8 +108,12 @@ def run(options: argparse.Namespace) -> int:
         raise ValueError(f"{names[reserved.index(None)]} is not a register")
     include_dirs = [*options.include_dir, *map(Path, settings.get("include-dirs", []))]
     infer = options.infer or settings.get("infer", False)
+    platform = options.platform or settings.get("platform")
+    if platform not in (None, *PLATFORMS):
+        raise ValueError(f"{platform!r} is not a platform: {', '.join(PLATFORMS)}")
     if options.effects:
-        print(*describe_files(options.files, reserved, include_dirs, infer), sep="\n")
+        lines = describe_files(options.files, reserved, include_dirs, infer, platform)
+        print(*lines, sep="\n")
         return 0
     findings = lint_files(
         options.files,
@@ -104,6 +122,7 @@ def run(options: argparse.Namespace) -> int:
         split(options.select, settings.get("select", [])),
         split(options.ignore, settings.get("ignore", [])),
         infer,
+        platform,
     )
     for finding in findings:
         print(finding)

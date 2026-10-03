@@ -18,6 +18,7 @@ OWN_FILE = "asm68klint.toml"
 PROJECT_FILE = "pyproject.toml"
 KEYS = ("reserved", "include-dirs", "select", "ignore")
 SWITCHES = ("infer",)
+WORDS = ("platform",)
 
 
 def read_config(path: Path) -> dict | None:
@@ -36,6 +37,10 @@ def read_config(path: Path) -> dict | None:
             continue
         if key in SWITCHES:
             raise ValueError(f"{path}: {key} must be true or false")
+        if key in WORDS and isinstance(value, str):
+            continue
+        if key in WORDS:
+            raise ValueError(f"{path}: {key} must be a word in quotes")
         if key not in KEYS:
             raise ValueError(f"{path}: unknown setting {key!r}")
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):

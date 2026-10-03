@@ -2,7 +2,7 @@
 
 import re
 
-from asm68klint.source import Statement, words
+from asm68klint.source import Statement, is_local, words
 
 # Directives that put data, not code, into the program.
 DATA = words("dc dcb ds dx blk dr db dw dl incbin")
@@ -25,6 +25,18 @@ OTHER = words(
     " idnt ttl list nolist page nopage plen llen spc output msource"
     " echo printt printv fail cargs"
 )
+
+
+# Directives whose label names a value, not a place in the program.
+SYMBOLS = words("= equ set fequ equr reg rs so fo macro rsset rsreset setso setfo")
+
+
+def code_label(statement: Statement) -> str | None:
+    """Return the global label a statement gives to a place in the program."""
+    label = statement.label
+    if not label or is_local(label) or statement.mnemonic in SYMBOLS:
+        return None
+    return label
 
 
 def is_data(statement: Statement) -> bool:

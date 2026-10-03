@@ -108,6 +108,8 @@ class Node:
     scope: str = ""  # the global label that local labels here belong to
     annotations: dict = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
+    # Calls of code in the same routine: the nodes they go to.
+    local_calls: list[int] = field(default_factory=list)
     falls_off: bool = False  # execution runs past the end of the file
     # Why it cannot be analysed: (rule code, message) pairs.
     errors: list[tuple[str, str]] = field(default_factory=list)
@@ -318,14 +320,17 @@ def successors(node: Node, choices: dict[str, bool]) -> list[int]:
 
 
 def analyse(
-    nodes: list[Node], choices: dict[str, bool] | None = None
+    nodes: list[Node], choices: dict[str, bool] | None = None, entry: int = 0
 ) -> list[State | None]:
-    """Return the state before each node, or None for nodes never reached."""
+    """Return the state before each node, or None for nodes never reached.
+
+    ``entry`` is the node execution starts at.
+    """
     states: list[State | None] = [None] * len(nodes)
-    if not nodes:
+    if entry >= len(nodes):
         return states
-    states[0] = State()
-    pending = [0]
+    states[entry] = State()
+    pending = [entry]
     while pending:
         index = pending.pop()
         after = step(states[index], nodes[index])
@@ -335,3 +340,18 @@ def analyse(
                 states[successor] = merged
                 pending.append(successor)
     return states
+
+
+def changed_by(nodes: list[Node], entry: int) -> frozenset[str]:
+    """Return the registers that code called at a node of a routine changes.
+
+    The stack pointer is left out: code that leaves the stack unbalanced is
+    reported where it is.
+    """
+    changed: set[str] = set()
+    for node, before in zip(nodes, analyse(nodes, {}, entry), strict=True):
+        if before is not None and node.exit:
+            changed |= step(before, node).registers
+            for call in node.calls:
+                changed |= call.registers if call.tail else set()
+    return frozenset(changed - {STACK})

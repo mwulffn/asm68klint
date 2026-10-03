@@ -120,6 +120,9 @@ def parse_statement(file: str, line: int, text: str) -> Statement:
         statement.label = match.group(1)
         code = code[match.end() :]
     code = code.strip()
+    if code.startswith("*"):  # a comment after a label, as Devpac has it
+        statement.comment = code[1:] + statement.comment
+        return statement
     if not code:
         return statement
     if code.startswith("="):

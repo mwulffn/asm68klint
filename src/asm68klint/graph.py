@@ -9,14 +9,16 @@ from asm68klint.directives import (
     ELSE_IF,
     END_IF,
     IF,
+    code_label,
     condition,
     decided,
     is_data,
     is_ignored,
 )
 from asm68klint.findings import Finding
-from asm68klint.flow import RETURNS, Call, Effect, Node, direct_target
+from asm68klint.flow import RETURNS, Call, Effect, Node, changed_by, direct_target
 from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
+from asm68klint.platforms import Platform
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
 from asm68klint.source import Statement, is_local
@@ -36,31 +38,67 @@ class Graph:
     # Global labels inside the routine, by the node they point at.
     entries: dict[int, Statement] = field(default_factory=dict)
     problems: list[Finding] = field(default_factory=list)
+    # The nodes that calls from inside the routine go to.
+    local_entries: set[int] = field(default_factory=set)
 
 
 def build_graph(
-    routine: Routine, following: Routine | None, resolve: Resolver
+    routine: Routine,
+    following: Routine | None,
+    resolve: Resolver,
+    platform: Platform | None = None,
 ) -> Graph:
     """Turn the code of a routine into nodes linked by control flow.
 
     ``following`` is the routine that comes next in the source, which execution
     falls into when it runs past the end of this one.
     """
-    collector = _Collector()
+    collector = _Collector(platform.silent if platform else frozenset())
     for statement in routine.body:
         collector.add(statement)
     collector.finish()
     graph = collector.graph
     for node in graph.nodes:
-        _link(node, graph, routine, following, resolve)
+        _link(node, graph, routine, following, resolve, platform)
+    _settle_local_calls(graph)
     return graph
+
+
+def _settle_local_calls(graph: Graph) -> None:
+    """Give the calls of code inside the routine what that code changes.
+
+    Such code may call more of the same, so this goes round until nothing is
+    added.
+    """
+    callers = [node for node in graph.nodes if node.local_calls]
+    if not callers:
+        return
+    outside = {node.index: list(node.calls) for node in callers}
+    names = {index: label for label, index in graph.labels.items()}
+    changed = {index: frozenset() for node in callers for index in node.local_calls}
+    graph.local_entries = set(changed)
+    growing = True
+    while growing:
+        growing = False
+        for node in callers:
+            node.calls = outside[node.index] + [
+                Call(
+                    f"the call to {names[index].removeprefix(node.scope)}",
+                    Effect(changed[index]),
+                )
+                for index in node.local_calls
+            ]
+        for index, before in changed.items():
+            changed[index] = changed_by(graph.nodes, index)
+            growing = growing or changed[index] != before
 
 
 class _Collector:
     """Creates the nodes of a routine and records its labels and annotations."""
 
-    def __init__(self) -> None:
+    def __init__(self, silent: frozenset[str] = frozenset()) -> None:
         self.graph = Graph()
+        self.silent = silent  # macros of a platform that emit nothing
         self.scope = ""  # the last global label
         # Annotations waiting for the next instruction.
         self.pending: dict[str, Annotation] = {}
@@ -81,6 +119,8 @@ class _Collector:
         self._read_annotation(statement)
         self._read_label(statement)
         if mnemonic is None or statement.is_macro_call or is_ignored(statement):
+            return
+        if mnemonic in self.silent:
             return
         if mnemonic in IF | ELSE | ELSE_IF | END_IF:
             self._conditional(statement)
@@ -129,7 +169,7 @@ class _Collector:
         index = len(self.graph.nodes)
         if statement.label and is_local(statement.label):
             self.graph.labels[self.scope + statement.label] = index
-        elif statement.label:
+        elif code_label(statement):
             self.scope = statement.label
             self.graph.labels[self.scope] = index
             self.graph.entries.setdefault(index, statement)
@@ -186,6 +226,7 @@ def _link(
     routine: Routine,
     following: Routine | None,
     resolve: Resolver,
+    platform: Platform | None,
 ) -> None:
     """Work out where execution goes after a node and what a call there changes."""
     title = routine.header.title
@@ -241,8 +282,11 @@ def _link(
 
     def transfer(kind: str) -> None:
         """Handle a call or jump, using the annotations where they are needed."""
+        known = platform.call(node.statement) if platform else None
         if name and kind == "jump" and key(name) in graph.labels:
             go_to(name, kind)
+        elif name and is_local(name) and key(name) in graph.labels:
+            node.local_calls.append(graph.labels[key(name)])
         elif clobbers and name:
             leave(f"the {kind} to {name}", clobbers.registers, kind)
         elif clobbers:
@@ -252,6 +296,8 @@ def _link(
         elif targets:
             for target in targets.labels:
                 go_to(target, kind)
+        elif known:
+            leave(f"the system call {text}", known, kind)
         else:
             message = f"cannot analyse the indirect {kind} {text}; {ANNOTATE}"
             node.errors.append(("F001", message))
@@ -272,6 +318,8 @@ def _link(
         transfer("call")
     elif mnemonic == "trap" and clobbers:
         leave(f"the {text}", clobbers.registers, "call")
+    elif mnemonic == "trap" and platform and platform.call(node.statement):
+        leave(f"the system call {text}", platform.call(node.statement), "call")
     elif mnemonic == "trap":
         message = f"cannot analyse {text}; add a lint: clobbers annotation"
         node.errors.append(("F001", message))

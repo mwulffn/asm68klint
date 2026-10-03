@@ -114,16 +114,57 @@ def test_call_to_unknown_routine_is_an_error(lint):
     ]
 
 
-def test_call_to_label_without_header_is_an_error(lint):
-    source = caller("""\
+def test_code_called_inside_the_routine_counts_where_it_is_called(lint):
+    body = """\
 	bsr	.Sub
 	rts
 .Sub:
+	moveq	#0,d3
 	rts
-""")
-    assert lint(source) == [
-        "main.s:8: error: cannot analyse the call to .Sub: it has no routine header",
-        "main.s:11: warning: unreachable code in Caller is not checked",
+"""
+    assert lint(caller(body, clobbers="d3")) == []
+    assert lint(caller(body)) == [
+        (
+            "main.s:8: error: d3 is clobbered by the call to .Sub but not listed"
+            " under Out or Clobbers of Caller"
+        )
+    ]
+
+
+def test_code_called_inside_the_routine_may_call_more(lint):
+    body = """\
+	bsr	.First
+	rts
+.First	moveq	#0,d3
+	bsr	.Second
+	bsr	.First
+	rts
+.Second	move.l	d4,-(sp)
+	moveq	#0,d4
+	moveq	#0,d5
+	move.l	(sp)+,d4
+	rts
+"""
+    assert lint(caller(body, clobbers="d3/d5")) == []
+
+
+def test_code_called_inside_the_routine_is_checked_itself(lint):
+    body = """\
+	bsr	.Sub
+	rts
+.Sub	move.l	d4,-(sp)
+	jsr	(a0)
+	rts
+"""
+    assert lint(caller(body)) == [
+        (
+            "main.s:11: error: cannot analyse the indirect call jsr (a0); add a"
+            " lint: clobbers or lint: targets annotation"
+        ),
+        (
+            "main.s:12: error: the stack is not balanced when code called in"
+            " Caller returns"
+        ),
     ]
 
 

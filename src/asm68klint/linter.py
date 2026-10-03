@@ -10,6 +10,7 @@ from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
 from asm68klint.header import FIELDS, Field
 from asm68klint.infer import find_starts
+from asm68klint.platforms import PLATFORMS, Platform
 from asm68klint.reader import read_source
 from asm68klint.reads import Reads, check_reads
 from asm68klint.registers import STACK, canonical, format_list
@@ -201,10 +202,13 @@ def check_paths(
     states: list[State | None],
     reserved: set[str],
     summary: Summary,
+    inside: bool = False,
 ) -> None:
     """Check the paths through a routine in one configuration.
 
     ``states`` holds the state before each node the configuration reaches.
+    With ``inside`` they are the paths of code the routine calls in itself:
+    what that changes counts where it is called.
     """
     header = routine.header
     title = header.title
@@ -228,6 +232,11 @@ def check_paths(
             summary.analysed = False
 
     exits = collect_exits(nodes, states)
+    if inside:
+        for node in exits.unbalanced:
+            message = f"the stack is not balanced when code called in {title} returns"
+            report(node.statement, "R006", message)
+        return
     declared = routine.declared
     changed = {register for register, _ in exits.changed}
     unpreserved = {register for register, _ in exits.unpreserved}
@@ -266,6 +275,9 @@ def examine(
     for choices in configurations(graph.nodes):
         states = analyse(graph.nodes, choices)
         check_paths(routine, graph, states, reserved, summary)
+        for entry in sorted(graph.local_entries):
+            states = analyse(graph.nodes, choices, entry)
+            check_paths(routine, graph, states, reserved, summary, inside=True)
         if not routine.header.problems:
             check_reads(routine, graph, choices, reserved, reads)
     return summary, reads
@@ -308,7 +320,7 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
 
 
 def graphs(
-    units: list[Unit], inferred: bool = False
+    units: list[Unit], platform: Platform | None, inferred: bool = False
 ) -> Iterator[tuple[Routine, Graph]]:
     """Build the graph of every routine, or of those without a header."""
     for unit in units:
@@ -320,11 +332,12 @@ def graphs(
                         routine,
                         following,
                         lambda name, unit=unit: resolve(name, unit, units),
+                        platform,
                     ),
                 )
 
 
-def settle(units: list[Unit], reserved: set[str]) -> None:
+def settle(units: list[Unit], reserved: set[str], platform: Platform | None) -> None:
     """Work out what the routines without headers read and change.
 
     What one does depends on what the routines it calls do, so this goes round
@@ -332,18 +345,18 @@ def settle(units: list[Unit], reserved: set[str]) -> None:
     leaves the stack unbalanced is reported itself, and its callers are
     checked as if it did not.
     """
-    growing = True
-    while growing:
-        growing = False
-        for routine, graph in graphs(units, inferred=True):
-            summary, reads = examine(routine, graph, reserved)
-            fields = routine.header.fields
-            found = {"In": reads.missing, "Clobbers": summary.changed - {STACK}}
-            for name, registers in found.items():
-                if not registers <= set(fields[name].registers):
-                    fields[name].registers = sorted(
-                        registers | set(fields[name].registers)
-                    )
+    # What is changed first: what a routine reads of what it was given
+    # depends on what the routines it calls change, and not the other way.
+    for name in ("Clobbers", "In"):
+        growing = True
+        while growing:
+            growing = False
+            for routine, graph in graphs(units, platform, inferred=True):
+                summary, reads = examine(routine, graph, reserved)
+                found = reads.missing if name == "In" else summary.changed - {STACK}
+                field = routine.header.fields[name]
+                if not found <= set(field.registers):
+                    field.registers = sorted(found | set(field.registers))
                     growing = True
 
 
@@ -352,6 +365,7 @@ def read_units(
     reserved: set[str],
     include_dirs: Iterable[Path] = (),
     infer: bool = False,
+    platform: Platform | None = None,
 ) -> tuple[list[Unit], set[Finding]]:
     """Read the source files and find their routines."""
     findings: set[Finding] = set()
@@ -363,7 +377,7 @@ def read_units(
     starts = find_starts(sources) if infer else [None] * len(sources)
     units = [Unit(*pair) for pair in zip(sources, starts, strict=True)]
     if infer:
-        settle(units, reserved)
+        settle(units, reserved, platform)
     return units, findings
 
 
@@ -374,6 +388,7 @@ def lint_files(
     select: Iterable[str] = (),
     ignore: Iterable[str] = (),
     infer: bool = False,
+    platform: str | None = None,
 ) -> list[Finding]:
     """Lint the given source files together and return the sorted findings.
 
@@ -382,14 +397,16 @@ def lint_files(
     ``select`` and ``ignore`` choose the rules to report, by code or by the
     beginning of one; nothing selected means all of them. With ``infer``, code
     need not have headers: what a routine without one does is worked out.
+    ``platform`` names the machine the program is for (see ``PLATFORMS``).
     """
     codes = chosen(select, ignore)
     reserved = {canonical(name) or name for name in reserved}
-    units, findings = read_units(paths, reserved, include_dirs, infer)
+    machine = PLATFORMS[platform] if platform else None
+    units, findings = read_units(paths, reserved, include_dirs, infer, machine)
     for unit in units:
         if not infer:
             findings.update(check_orphans(unit.orphans))
-    for routine, graph in graphs(units):
+    for routine, graph in graphs(units, machine):
         findings.update(check_routine(routine, graph, reserved))
     return sorted(
         (finding for finding in findings if finding.code in codes),
@@ -407,6 +424,7 @@ def describe_files(
     reserved: Iterable[str] = DEFAULT_RESERVED,
     include_dirs: Iterable[Path] = (),
     infer: bool = False,
+    platform: str | None = None,
 ) -> list[str]:
     """Return a line for every routine saying what it reads and changes.
 
@@ -414,7 +432,8 @@ def describe_files(
     (with ``infer``), what its code does.
     """
     reserved = {canonical(name) or name for name in reserved}
-    units, _ = read_units(paths, reserved, include_dirs, infer)
+    machine = PLATFORMS[platform] if platform else None
+    units, _ = read_units(paths, reserved, include_dirs, infer, machine)
     lines = []
     for unit in units:
         for routine in unit.routines:
