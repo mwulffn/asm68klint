@@ -25,6 +25,7 @@ KEYS = (
     "define",
     "undefine",
 )
+NUMBERS = ("comment-column",)
 SWITCHES = ("infer", "fpu")
 WORDS = ("platform", "syntax", "extern", "cpu")
 
@@ -45,6 +46,10 @@ def read_config(path: Path) -> dict | None:
             continue
         if key in SWITCHES:
             raise ValueError(f"{path}: {key} must be true or false")
+        if key in NUMBERS and isinstance(value, int):
+            continue
+        if key in NUMBERS:
+            raise ValueError(f"{path}: {key} must be a number")
         if key in WORDS and isinstance(value, str):
             continue
         if key in WORDS:

@@ -11,6 +11,7 @@ from pathlib import Path
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
 from asm68klint.fix import fix_files
+from asm68klint.format import COMMENT_COLUMN, format_files
 from asm68klint.linter import (
     describe_files,
     free_registers,
@@ -146,6 +147,28 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         help="list what every routine reads and changes, and do not lint",
     )
     parser.add_argument(
+        "--format",
+        action="store_true",
+        help=(
+            "lay the files out in columns, with mnemonics and registers in lower"
+            " case, and do not lint; only blanks and case are changed"
+        ),
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="with --format: change nothing, and exit 1 if a file would change",
+    )
+    parser.add_argument(
+        "--diff", action="store_true", help="with --format: show the changes instead"
+    )
+    parser.add_argument(
+        "--comment-column",
+        type=int,
+        metavar="N",
+        help="with --format: the column comments start in (default: 48)",
+    )
+    parser.add_argument(
         "--fix",
         action="store_true",
         help=(
@@ -196,6 +219,18 @@ def gather(options: argparse.Namespace) -> dict:
 def run(options: argparse.Namespace) -> int:
     """Lint as the options and the configuration file say."""
     settings = gather(options)
+    column = options.comment_column or settings.pop("comment_column", COMMENT_COLUMN)
+    settings.pop("comment_column", None)
+    if options.format:
+        write = not (options.check or options.diff)
+        changed, passed, diff = format_files(options.files, column, write)
+        for file in passed:
+            print(f"{file}: not formatted: it is for the GNU assembler")
+        if options.diff:
+            print(*diff, sep="\n")
+        for file in () if options.diff else changed:
+            print(f"{file}: {'formatted' if write else 'would be formatted'}")
+        return 1 if changed and not write else 0
     if options.effects or options.free or options.fix:
         for name in ("select", "ignore", "extend_select"):
             settings.pop(name, None)
