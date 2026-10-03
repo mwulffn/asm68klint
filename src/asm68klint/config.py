@@ -18,7 +18,7 @@ OWN_FILE = "asm68klint.toml"
 PROJECT_FILE = "pyproject.toml"
 KEYS = ("reserved", "include-dirs", "select", "ignore")
 SWITCHES = ("infer",)
-WORDS = ("platform", "syntax")
+WORDS = ("platform", "syntax", "extern")
 
 
 def read_config(path: Path) -> dict | None:

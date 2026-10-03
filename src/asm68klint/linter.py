@@ -4,21 +4,20 @@ import itertools
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
 from asm68klint.header import FIELDS, Field
 from asm68klint.infer import find_starts
-from asm68klint.platforms import PLATFORMS, Platform
+from asm68klint.options import Options, make_options
 from asm68klint.reader import read_source
 from asm68klint.reads import Reads, check_reads
-from asm68klint.registers import STACK, canonical, format_list
+from asm68klint.registers import STACK, format_list
 from asm68klint.routines import Routine, check_label, check_orphans, find_routines
-from asm68klint.rules import chosen
 from asm68klint.source import Statement, is_local, problem
 
-DEFAULT_RESERVED = ("a5", "a6")
 # With more different conditions of conditional assembly than this in one
 # routine, their combinations are no longer checked one by one.
 MAX_CONDITIONS = 8
@@ -46,12 +45,15 @@ class Unit:
                 self.exports.update(statement.operands)
 
 
-def resolve(name: str, unit: Unit, units: list[Unit]) -> Effect | str:
+def resolve(
+    name: str, unit: Unit, units: list[Unit], outside: Effect | None = None
+) -> Effect | str:
     """Find the routine a call in ``unit`` refers to.
 
     Returns what its header says a call of it does, or the reason the call
     cannot be analysed. A routine in the same unit comes first, then
     exported routines of the other units, then their other global labels.
+    ``outside`` is what a routine that is in none of the files does.
     """
     for routine in unit.routines:
         if routine.header.name == name:
@@ -65,6 +67,8 @@ def resolve(name: str, unit: Unit, units: list[Unit]) -> Effect | str:
                 place = (routine.header.file, routine.header.line)
                 found[name in other.exports][place] = routine
     candidates = list((found[True] or found[False]).values())
+    if not candidates and outside is not None:
+        return outside
     if not candidates:
         return "no routine of that name in the files given"
     if len(candidates) > 1:
@@ -320,7 +324,7 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
 
 
 def graphs(
-    units: list[Unit], platform: Platform | None, inferred: bool = False
+    units: list[Unit], options: Options, inferred: bool = False
 ) -> Iterator[tuple[Routine, Graph]]:
     """Build the graph of every routine, or of those without a header."""
     for unit in units:
@@ -331,13 +335,15 @@ def graphs(
                     build_graph(
                         routine,
                         following,
-                        lambda name, unit=unit: resolve(name, unit, units),
-                        platform,
+                        lambda name, unit=unit: resolve(
+                            name, unit, units, options.extern
+                        ),
+                        options.platform,
                     ),
                 )
 
 
-def settle(units: list[Unit], reserved: set[str], platform: Platform | None) -> None:
+def settle(units: list[Unit], options: Options) -> None:
     """Work out what the routines without headers read and change.
 
     What one does depends on what the routines it calls do, so this goes round
@@ -345,13 +351,14 @@ def settle(units: list[Unit], reserved: set[str], platform: Platform | None) -> 
     leaves the stack unbalanced is reported itself, and its callers are
     checked as if it did not.
     """
+    reserved = set(options.reserved)
     # What is changed first: what a routine reads of what it was given
     # depends on what the routines it calls change, and not the other way.
     for name in ("Clobbers", "In"):
         growing = True
         while growing:
             growing = False
-            for routine, graph in graphs(units, platform, inferred=True):
+            for routine, graph in graphs(units, options, inferred=True):
                 summary, reads = examine(routine, graph, reserved)
                 found = reads.missing if name == "In" else summary.changed - {STACK}
                 field = routine.header.fields[name]
@@ -361,59 +368,39 @@ def settle(units: list[Unit], reserved: set[str], platform: Platform | None) -> 
 
 
 def read_units(
-    paths: Iterable[Path],
-    reserved: set[str],
-    include_dirs: Iterable[Path] = (),
-    infer: bool = False,
-    platform: Platform | None = None,
-    syntax: str = "auto",
+    paths: Iterable[Path], options: Options
 ) -> tuple[list[Unit], set[Finding]]:
     """Read the source files and find their routines."""
     findings: set[Finding] = set()
     sources = []
     for path in paths:
-        statements, problems = read_source(Path(path), include_dirs, syntax)
+        statements, problems = read_source(
+            Path(path), options.include_dirs, options.syntax
+        )
         findings.update(problems)
         sources.append(statements)
-    starts = find_starts(sources) if infer else [None] * len(sources)
+    starts = find_starts(sources) if options.infer else [None] * len(sources)
     units = [Unit(*pair) for pair in zip(sources, starts, strict=True)]
-    if infer:
-        settle(units, reserved, platform)
+    if options.infer:
+        settle(units, options)
     return units, findings
 
 
-def lint_files(
-    paths: Iterable[Path],
-    reserved: Iterable[str] = DEFAULT_RESERVED,
-    include_dirs: Iterable[Path] = (),
-    select: Iterable[str] = (),
-    ignore: Iterable[str] = (),
-    infer: bool = False,
-    platform: str | None = None,
-    syntax: str = "auto",
-) -> list[Finding]:
+def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
     """Lint the given source files together and return the sorted findings.
 
-    ``reserved`` names the registers that may not be written without a
-    ``lint: allow`` annotation. ``include_dirs`` are searched for include files.
-    ``select`` and ``ignore`` choose the rules to report, by code or by the
-    beginning of one; nothing selected means all of them. With ``infer``, code
-    need not have headers: what a routine without one does is worked out.
-    ``platform`` names the machine the program is for (see ``PLATFORMS``).
-    ``syntax`` is the assembler's: ``motorola``, ``gas``, or ``auto`` to decide
-    for each file.
+    The settings are those of ``make_options``.
     """
-    codes = chosen(select, ignore)
-    reserved = {canonical(name) or name for name in reserved}
-    machine = PLATFORMS[platform] if platform else None
-    units, findings = read_units(paths, reserved, include_dirs, infer, machine, syntax)
+    options = make_options(**settings)
+    reserved = set(options.reserved)
+    units, findings = read_units(paths, options)
     for unit in units:
-        if not infer:
+        if not options.infer:
             findings.update(check_orphans(unit.orphans))
-    for routine, graph in graphs(units, machine):
+    for routine, graph in graphs(units, options):
         findings.update(check_routine(routine, graph, reserved))
     return sorted(
-        (finding for finding in findings if finding.code in codes),
+        (finding for finding in findings if finding.code in options.codes),
         key=lambda finding: (
             finding.file,
             finding.line,
@@ -423,22 +410,14 @@ def lint_files(
     )
 
 
-def describe_files(
-    paths: Iterable[Path],
-    reserved: Iterable[str] = DEFAULT_RESERVED,
-    include_dirs: Iterable[Path] = (),
-    infer: bool = False,
-    platform: str | None = None,
-    syntax: str = "auto",
-) -> list[str]:
+def describe_files(paths: Iterable[Path], **settings: Any) -> list[str]:
     """Return a line for every routine saying what it reads and changes.
 
     For a routine with a header that is what the header says; for one without
-    (with ``infer``), what its code does.
+    (with ``infer``), what its code does. The settings are those of
+    ``make_options``.
     """
-    reserved = {canonical(name) or name for name in reserved}
-    machine = PLATFORMS[platform] if platform else None
-    units, _ = read_units(paths, reserved, include_dirs, infer, machine, syntax)
+    units, _ = read_units(paths, make_options(**settings))
     lines = []
     for unit in units:
         for routine in unit.routines:

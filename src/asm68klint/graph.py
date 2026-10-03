@@ -248,7 +248,17 @@ def _link(
             node.falls_off = True
 
     def key(target: str) -> str:
-        return label_key(node.scope, target)
+        """Return the name a label is kept under.
+
+        Some assemblers take ``.Loop`` and ``.loop`` for one label: a label
+        that is not there as written is looked for whatever its case.
+        """
+        name = label_key(node.scope, target)
+        if name not in graph.labels:
+            same = [label for label in graph.labels if label.lower() == name.lower()]
+            if len(same) == 1:
+                return same[0]
+        return name
 
     def leave(via: str, effect: Effect | set[str], kind: str) -> None:
         """Record a call, or a jump out of the routine, that changes registers.

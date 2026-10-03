@@ -17,8 +17,9 @@ from asm68klint.source import NUMBERED, Statement, words
 
 _SIGNS = (
     re.compile(
-        r"^\s*\.(text|data|bss|globl|global|section|macro|align|long|equ|set"
-        r"|include|word|byte)\b"
+        r"^\s*(\w+:\s*)?\.(text|data|bss|globl|global|section|macro|align|long|equ"
+        r"|set|include|word|byte|dc|ds|even)\b",
+        re.IGNORECASE,
     ),
     re.compile(r"^\s*#\s*(include|define|ifdef|ifndef|if|endif)\b"),
     re.compile(r"%(d[0-7]|a[0-7]|sp)\b"),
@@ -227,6 +228,8 @@ def _set_mnemonic(statement: Statement, name: str) -> None:
     elif directive and stem in SPACE:
         statement.mnemonic = "ds"
         statement.operands = statement.operands or ("1",)
+    elif directive and stem == "equ" and statement.label:
+        statement.mnemonic = "equ"  # Name: .equ value, as Atari's assembler has it
     elif directive and stem == "equ" and statement.operands:
         statement.label = statement.operands[0]
         statement.mnemonic = "equ"

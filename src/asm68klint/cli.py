@@ -8,10 +8,9 @@ from pathlib import Path
 
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
-from asm68klint.linter import DEFAULT_RESERVED, describe_files, lint_files
+from asm68klint.linter import describe_files, lint_files
+from asm68klint.options import DEFAULT_RESERVED, SYNTAXES
 from asm68klint.platforms import PLATFORMS
-from asm68klint.reader import SYNTAXES
-from asm68klint.registers import canonical
 from asm68klint.rules import RULES
 
 
@@ -76,6 +75,15 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--extern",
+        metavar="REGISTERS",
+        help=(
+            "what a routine that is in none of the files may change, such as"
+            " d0-d1/a0-a1 for code from a C compiler; without it a call of one"
+            " is an error"
+        ),
+    )
+    parser.add_argument(
         "--platform",
         choices=sorted(PLATFORMS),
         help="the machine the program is for: what its system calls change",
@@ -100,45 +108,33 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
     return options
 
 
-def split(text: str | None, default: list[str]) -> list[str]:
+def split(text: str) -> list[str]:
     """Split a command line list at its commas; ``-`` is the empty list."""
-    if text is None:
-        return default
     return [] if text == "-" else text.split(",")
+
+
+def gather(options: argparse.Namespace) -> dict:
+    """Put the settings of the configuration file and the command line together."""
+    settings = read_config(options.config) if options.config else find_config(Path())
+    settings = {key.replace("-", "_"): value for key, value in (settings or {}).items()}
+    for name in ("reserved", "select", "ignore"):
+        if getattr(options, name) is not None:
+            settings[name] = split(getattr(options, name))
+    for name in ("platform", "syntax", "extern"):
+        if getattr(options, name) is not None:
+            settings[name] = getattr(options, name)
+    settings["infer"] = options.infer or settings.get("infer", False)
+    settings["include_dirs"] = [*options.include_dir, *settings.get("include_dirs", [])]
+    return settings
 
 
 def run(options: argparse.Namespace) -> int:
     """Lint as the options and the configuration file say."""
-    settings = read_config(options.config) if options.config else find_config(Path())
-    settings = settings or {}
-    names = split(options.reserved, settings.get("reserved", list(DEFAULT_RESERVED)))
-    reserved = [canonical(name) for name in names]
-    if None in reserved:
-        raise ValueError(f"{names[reserved.index(None)]} is not a register")
-    include_dirs = [*options.include_dir, *map(Path, settings.get("include-dirs", []))]
-    infer = options.infer or settings.get("infer", False)
-    platform = options.platform or settings.get("platform")
-    if platform not in (None, *PLATFORMS):
-        raise ValueError(f"{platform!r} is not a platform: {', '.join(PLATFORMS)}")
-    syntax = options.syntax or settings.get("syntax", "auto")
-    if syntax not in SYNTAXES:
-        raise ValueError(f"{syntax!r} is not a syntax: {', '.join(SYNTAXES)}")
+    settings = gather(options)
     if options.effects:
-        lines = describe_files(
-            options.files, reserved, include_dirs, infer, platform, syntax
-        )
-        print(*lines, sep="\n")
+        print(*describe_files(options.files, **settings), sep="\n")
         return 0
-    findings = lint_files(
-        options.files,
-        reserved,
-        include_dirs,
-        split(options.select, settings.get("select", [])),
-        split(options.ignore, settings.get("ignore", [])),
-        infer,
-        platform,
-        syntax,
-    )
+    findings = lint_files(options.files, **settings)
     for finding in findings:
         print(finding)
     return 1 if any(finding.severity == ERROR for finding in findings) else 0

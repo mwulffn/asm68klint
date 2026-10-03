@@ -12,10 +12,11 @@ from pathlib import Path
 
 from asm68klint import gas
 from asm68klint.findings import Finding
-from asm68klint.m68k import normalise
+from asm68klint.m68k import is_instruction, normalise
 from asm68klint.source import Statement, parse_statement, problem
 
-SYNTAXES = ("auto", "motorola", "gas")
+# Directives that are taken as such in the first column, where a label goes.
+FIRST_COLUMN = ("dc", "ds", "dcb", "include", "incbin", "section", "even")
 Parser = Callable[[str, int, str], Statement]
 
 MAX_DEPTH = 50
@@ -39,6 +40,22 @@ def find_file(directory: Path, name: str) -> Path | None:
             return None
         directory = names[part.lower()]
     return directory if directory.is_file() else None
+
+
+def parse_motorola(file: str, line: int, text: str) -> Statement:
+    """Read a line of Motorola syntax.
+
+    Some assemblers take an instruction that starts in the first column, where
+    others want a label: a "label" there that is an instruction or ``dc`` and
+    has no colon is read as what it is.
+    """
+    statement = parse_statement(file, line, text)
+    label = statement.label
+    if label and text.startswith(label) and not text.startswith(label + ":"):
+        stem = label.lower().partition(".")[0]
+        if is_instruction(stem) or stem in FIRST_COLUMN:
+            statement = parse_statement(file, line, " " + text)
+    return normalise(statement)
 
 
 @dataclass
@@ -77,9 +94,7 @@ class Reader:
                 return normalise(gas.parse_statement(file, line, text, numbered))
 
             return parse, gas.strip_block_comments(lines)
-        return lambda file, line, text: normalise(
-            parse_statement(file, line, text)
-        ), lines
+        return parse_motorola, lines
 
     def read_file(self, path: Path) -> None:
         """Read a file, unless it has been read already."""

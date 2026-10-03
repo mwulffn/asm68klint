@@ -54,6 +54,9 @@ GAS_SILENT = words(
 OTHER |= GAS_SILENT | {"irp", "irpc"}
 
 
+NOPS = ("$4e71", "0x4e71")
+
+
 def is_data(statement: Statement) -> bool:
     """True for a directive that emits data."""
     return statement.mnemonic in DATA and not is_ignored(statement)
@@ -63,6 +66,10 @@ def is_ignored(statement: Statement) -> bool:
     """True for a directive that the flow analysis can pass over."""
     if statement.mnemonic == "ds" and statement.operands[:1] == ("0",):
         return True  # only aligns
+    if statement.mnemonic in DATA and statement.size == "w":
+        values = statement.operands[statement.mnemonic != "dc" :]
+        if values and all(value.lower() in NOPS for value in values):
+            return True  # nop instructions written as data
     return statement.mnemonic in OTHER
 
 
