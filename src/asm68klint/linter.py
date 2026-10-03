@@ -272,18 +272,24 @@ def check_paths(
 
 
 def examine(
-    routine: Routine, graph: Graph, reserved: set[str]
+    routine: Routine, graph: Graph, reserved: set[str], roughly: str = ""
 ) -> tuple[Summary, Reads]:
-    """Follow a routine's code in every configuration."""
+    """Follow a routine's code in every configuration.
+
+    With ``roughly`` it is followed once, every conditional going both ways,
+    and only for what the routine changes (``Clobbers``) or reads (``In``):
+    that is enough to work out what a routine without a header does.
+    """
     summary = Summary()
     reads = Reads()
-    for choices in configurations(graph.nodes):
-        states = analyse(graph.nodes, choices)
-        check_paths(routine, graph, states, reserved, summary)
-        for entry in sorted(graph.local_entries):
+    for choices in [{}] if roughly else configurations(graph.nodes):
+        if roughly != "In":
+            states = analyse(graph.nodes, choices)
+            check_paths(routine, graph, states, reserved, summary)
+        for entry in sorted(graph.local_entries if not roughly else ()):
             states = analyse(graph.nodes, choices, entry)
             check_paths(routine, graph, states, reserved, summary, inside=True)
-        if not routine.header.problems:
+        if not routine.header.problems and roughly != "Clobbers":
             check_reads(routine, graph, choices, reserved, reads)
     return summary, reads
 
@@ -371,7 +377,7 @@ def settle(units: list[Unit], options: Options) -> None:
         while growing:
             growing = False
             for routine, graph in graphs(units, options, inferred=True):
-                summary, reads = examine(routine, graph, reserved)
+                summary, reads = examine(routine, graph, reserved, name)
                 found = reads.missing if name == "In" else summary.changed - {STACK}
                 field = routine.header.fields[name]
                 if not found <= set(field.registers):

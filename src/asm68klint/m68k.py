@@ -178,6 +178,9 @@ def written_registers(statement: Statement) -> set[str]:
     pair (``d2:d3``, of a long division) or have a bit field (``d1{4:8}``).
     Pushes and pops through the stack pointer are not included.
     """
+    kept = statement.__dict__.get("_written")
+    if kept is not None:
+        return set(kept)
     written: set[str] = set()
     lists = statement.mnemonic in ("movem", "fmovem")
     for operand in destinations(statement):
@@ -191,6 +194,7 @@ def written_registers(statement: Statement) -> set[str]:
         register = stepped_register(operand)
         if register and register != STACK:
             written.add(register)
+    statement.__dict__["_written"] = frozenset(written)
     return written
 
 
@@ -201,6 +205,13 @@ def read_registers(statement: Statement) -> set[str]:
     destination register unless the instruction only overwrites it. The stack
     pointer is included like any other.
     """
+    kept = statement.__dict__.get("_read")
+    if kept is None:
+        kept = statement.__dict__["_read"] = frozenset(_read_registers(statement))
+    return set(kept)
+
+
+def _read_registers(statement: Statement) -> set[str]:
     mnemonic, operands = statement.mnemonic, statement.operands
     names = [canonical(operand) for operand in operands]
     if mnemonic in CLEARS_ITSELF and len(names) == 2 and names[0] == names[1]:

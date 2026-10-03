@@ -100,10 +100,12 @@ def _add_missed(statements: list[Statement], starts: set[str], code: set[str]) -
 
 
 def _unreached(routine: Routine, code: set[str]) -> set[str]:
-    """Return the first global label in a routine that its code does not get to.
+    """Return the global labels in a routine that must start routines of their own.
 
-    This follows the code roughly: conditional assembly is ignored, and a
-    branch goes both ways.
+    Those are the labels its code does not get to: the first of them, then the
+    first that neither the routine nor the code from that label gets to, and
+    so on. This follows the code roughly: conditional assembly is ignored, and
+    a branch goes both ways.
     """
     body = routine.body
     places: dict[str, int] = {}
@@ -116,25 +118,31 @@ def _unreached(routine: Routine, code: set[str]) -> set[str]:
         elif statement.label and is_local(statement.label):
             places[label_key(scope, statement.label)] = index
         scopes.append(scope)
+    candidates = [
+        index for index, statement in enumerate(body) if code_label(statement) in code
+    ]
     reached = [False] * len(body)
+    found: set[str] = set()
     pending = [0] if body else []
-    while pending:
-        index = pending.pop()
-        while index < len(body) and not reached[index]:
-            reached[index] = True
-            statement = body[index]
-            mnemonic = statement.mnemonic
-            if is_data(statement):
-                break
-            if mnemonic in JUMPS and statement.operands:
-                name = direct_target(statement.operands[-1]) or ""
-                name = label_key(scopes[index], name)
-                if name in places:
-                    pending.append(places[name])
-            if mnemonic in NO_FALL_THROUGH:
-                break
-            index += 1
-    for index, statement in enumerate(body):
-        if code_label(statement) in code and not reached[index]:
-            return {statement.label or ""}  # what follows it may be reached from it
-    return set()
+    while True:
+        while pending:
+            index = pending.pop()
+            while index < len(body) and not reached[index]:
+                reached[index] = True
+                statement = body[index]
+                mnemonic = statement.mnemonic
+                if is_data(statement):
+                    break
+                if mnemonic in JUMPS and statement.operands:
+                    name = direct_target(statement.operands[-1]) or ""
+                    name = label_key(scopes[index], name)
+                    if name in places:
+                        pending.append(places[name])
+                if mnemonic in NO_FALL_THROUGH:
+                    break
+                index += 1
+        missed = next((index for index in candidates if not reached[index]), None)
+        if missed is None:
+            return found
+        found.add(body[missed].label or "")
+        pending.append(missed)
