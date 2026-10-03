@@ -18,6 +18,7 @@ from asm68klint.reads import Reads, check_reads, live_registers
 from asm68klint.registers import REGISTERS, STACK, format_list
 from asm68klint.routines import Routine, check_label, check_orphans, find_routines
 from asm68klint.source import Statement, is_local, problem
+from asm68klint.style import check_style
 from asm68klint.tables import find_tables
 
 # With more different conditions of conditional assembly than this in one
@@ -507,6 +508,7 @@ def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
     """
     options = make_options(**settings)
     reserved = set(options.reserved)
+    paths = list(paths)
     units, findings = read_units(paths, options)
     for unit in units:
         if not options.infer:
@@ -515,6 +517,9 @@ def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
         findings.update(check_routine(routine, graph, reserved, options.infer))
         if options.cpu:
             findings.update(check_processor(graph, options.cpu, options.fpu))
+    if any(code.startswith("T") for code in options.codes):
+        sources = [unit.statements for unit in units]
+        findings.update(check_style(list(map(Path, paths)), sources, options))
     return sorted(
         (finding for finding in findings if finding.code in options.codes),
         key=lambda finding: (

@@ -7,6 +7,7 @@ goes away leaves its number unused.
 ``R``  registers and the stack
 ``F``  control flow
 ``S``  source the linter cannot read
+``T``  style: off unless selected
 """
 
 from collections.abc import Iterable
@@ -24,6 +25,7 @@ class Rule:
     name: str
     severity: str
     summary: str
+    default: bool = True  # reported unless left out; a style rule is not
 
 
 RULES = {
@@ -56,16 +58,28 @@ RULES = {
         Rule("S004", "register-list", ERROR, "a movem with an unreadable list"),
         Rule("S005", "annotation", ERROR, "a lint annotation that is wrong"),
         Rule("S006", "processor", ERROR, "an instruction the chosen CPU has not"),
+        Rule("T001", "write-only-read", ERROR, "a write-only register is read", False),
+        Rule("T002", "odd-field", ERROR, "a word field at an odd offset", False),
+        Rule("T003", "missing-size", WARNING, "an instruction without a size", False),
+        Rule("T004", "sized-branch", WARNING, "a branch with a size", False),
+        Rule("T005", "index-displacement", ERROR, "d8(an,xn) out of range", False),
+        Rule("T006", "unused-xref", WARNING, "a name imported and not used", False),
+        Rule("T007", "unused-xdef", WARNING, "a name exported, never imported", False),
     )
 }
 
 
-def chosen(select: Iterable[str] = (), ignore: Iterable[str] = ()) -> set[str]:
+def chosen(
+    select: Iterable[str] = (),
+    ignore: Iterable[str] = (),
+    extend_select: Iterable[str] = (),
+) -> set[str]:
     """Return the codes of the rules to report.
 
     ``select`` and ``ignore`` hold codes or their beginnings (``R`` for every
-    register rule). Nothing selected means every rule. A name that matches no
-    rule raises ValueError.
+    register rule). Nothing selected means every rule but the style rules;
+    ``extend_select`` adds to that, or to what is selected. A name that
+    matches no rule raises ValueError.
     """
 
     def matching(prefixes: Iterable[str]) -> set[str]:
@@ -77,4 +91,5 @@ def chosen(select: Iterable[str] = (), ignore: Iterable[str] = ()) -> set[str]:
             found |= codes
         return found
 
-    return (matching(select) or set(RULES)) - matching(ignore)
+    usual = {code for code, rule in RULES.items() if rule.default}
+    return ((matching(select) or usual) | matching(extend_select)) - matching(ignore)

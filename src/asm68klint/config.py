@@ -16,7 +16,15 @@ from pathlib import Path
 
 OWN_FILE = "asm68klint.toml"
 PROJECT_FILE = "pyproject.toml"
-KEYS = ("reserved", "include-dirs", "select", "ignore", "define", "undefine")
+KEYS = (
+    "reserved",
+    "include-dirs",
+    "select",
+    "extend-select",
+    "ignore",
+    "define",
+    "undefine",
+)
 SWITCHES = ("infer", "fpu")
 WORDS = ("platform", "syntax", "extern", "cpu")
 

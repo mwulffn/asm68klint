@@ -57,6 +57,11 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         help="rules to report, by code or its beginning: H,R001 (default: all)",
     )
     parser.add_argument(
+        "--extend-select",
+        metavar="RULES",
+        help="rules to report as well: T for the style rules, which are off",
+    )
+    parser.add_argument(
         "--ignore", metavar="RULES", help="rules not to report, given the same way"
     )
     parser.add_argument(
@@ -174,7 +179,7 @@ def gather(options: argparse.Namespace) -> dict:
     """Put the settings of the configuration file and the command line together."""
     settings = read_config(options.config) if options.config else find_config(Path())
     settings = {key.replace("-", "_"): value for key, value in (settings or {}).items()}
-    for name in ("reserved", "select", "ignore"):
+    for name in ("reserved", "select", "ignore", "extend_select"):
         if getattr(options, name) is not None:
             settings[name] = split(getattr(options, name))
     for name in ("platform", "syntax", "extern", "cpu"):
@@ -192,8 +197,8 @@ def run(options: argparse.Namespace) -> int:
     """Lint as the options and the configuration file say."""
     settings = gather(options)
     if options.effects or options.free or options.fix:
-        settings.pop("select", None)
-        settings.pop("ignore", None)
+        for name in ("select", "ignore", "extend_select"):
+            settings.pop(name, None)
     if options.fix:
         for file, count in sorted(fix_files(options.files, **settings).items()):
             print(f"{file}: {count} header{'s' if count > 1 else ''} written")

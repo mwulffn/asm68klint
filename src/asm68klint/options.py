@@ -43,13 +43,15 @@ def make_options(
     fpu: bool = False,
     define: Iterable[str] = (),
     undefine: Iterable[str] = (),
+    extend_select: Iterable[str] = (),
 ) -> Options:
     """Check the settings of a lint run and put them together.
 
     ``reserved`` names the registers that may not be written without a
     ``lint: allow`` annotation. ``include_dirs`` are searched for include files.
     ``select`` and ``ignore`` choose the rules to report, by code or by the
-    beginning of one; nothing selected means all of them. With ``infer``, code
+    beginning of one; nothing selected means all but the style rules, and
+    ``extend_select`` adds to either. With ``infer``, code
     need not have headers: what a routine without one does is worked out.
     ``platform`` names the machine the program is for (see ``PLATFORMS``).
     ``syntax`` is the assembler's: ``motorola``, ``gas``, or ``auto`` to decide
@@ -85,7 +87,7 @@ def make_options(
     return Options(
         frozenset(registers),
         tuple(map(Path, include_dirs)),
-        frozenset(chosen(select, ignore)),
+        frozenset(chosen(select, ignore, extend_select)),
         infer,
         PLATFORMS[platform] if platform else None,
         syntax,
