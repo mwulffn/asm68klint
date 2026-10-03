@@ -97,7 +97,8 @@ routines whose callees changed.
 - A formatter (columns, case), checked by assembling before and after
   and comparing the binaries.
 - What code called inside a routine reads is not checked against `In`.
-- Branches to `*+N`.
+- Branches to `*+N` other than the conditional return (`beq.s *+4` over a
+  one-word instruction): they need the length of instructions.
 - A `lint: out d0` annotation, so that a result of an annotated call is
   known and the rest counts as lost.
 - CPU32 and ColdFire if ever wanted; 68020 addressing modes are read for

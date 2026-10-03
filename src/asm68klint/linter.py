@@ -322,13 +322,46 @@ def examine(
     return summary, reads
 
 
+def hidden_entry(graph: Graph, reached: set[int]) -> int | None:
+    """Return the first node that nothing reaches but that looks like an entry.
+
+    That is code with a label (its address is taken somewhere), and a jump
+    straight after a jump or after data: a row of them is a table of entries,
+    which may have gaps.
+    """
+    labelled = set(graph.labels.values())
+    jumps = ("jmp", "bra")
+    for node in graph.nodes:
+        if node.index in reached or node.kind != "code" or node.borrowed:
+            continue
+        before = graph.nodes[node.index - 1] if node.index else node
+        if node.index in labelled:
+            return node.index
+        in_row = before.is_data or before.statement.mnemonic in jumps
+        if node.statement.mnemonic in jumps and in_row:
+            return node.index
+    return None
+
+
 def check_routine(
     routine: Routine, graph: Graph, reserved: set[str], lenient: bool = False
 ) -> list[Finding]:
-    """Compare what a routine does to registers with what its header declares."""
+    """Compare what a routine does to registers with what its header declares.
+
+    With ``lenient`` (code need not have headers), code in the routine that
+    nothing reaches but that looks like an entry is checked as one: what it
+    changes is not counted as the routine's.
+    """
     header = routine.header
     title = header.title
     summary, reads = examine(routine, graph, reserved)
+    entry = hidden_entry(graph, summary.reached) if lenient else None
+    while entry is not None:
+        for choices in configurations(graph.nodes):
+            states = analyse(graph.nodes, choices, entry)
+            check_paths(routine, graph, states, reserved, summary, inside=True)
+        summary.reached.add(entry)
+        entry = hidden_entry(graph, summary.reached)
     findings = header.problems + routine.problems + check_label(routine)
     findings += (
         graph.problems

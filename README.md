@@ -133,6 +133,7 @@ More of what is followed:
   the table is a list of offsets (`Table: dc.w First-Table,Second-Table`)
   or a row of branches (`Table: bra.w First` and so on).
 - **Nops written as data** (`dcb.w 96,$4e71`) are code that does nothing.
+- **A conditional return** written `beq.s *+4` / `rts`.
 
 The instruction table knows which operand each instruction writes and
 which it reads, including the implicit ones: the counter of `dbcc`, the
@@ -206,6 +207,11 @@ routine at a time.
 - **What a routine does** is what its code changes at its returns, and
   what it reads before writing. Which of the registers it changes are
   results is not known, so none of them counts as lost after a call.
+- **Code reached only through its address.** Code with a label that
+  nothing in its routine reaches (`lea .handler(pc),a0` somewhere), and a
+  row of jumps (`jmp .init(pc)` / `jmp .play(pc)`: a table of entries),
+  is checked as an entry of its own. What it changes is not counted as
+  the routine's.
 - A routine that leaves the stack unbalanced is reported itself; its
   callers are checked as if it did not.
 
@@ -455,7 +461,9 @@ Things that are reported although the code may be correct:
   entry if the entry has a header of its own (or with `--infer`).
 - Unreachable code is only warned about, never analysed. Code reached
   through an address in a register needs a `targets` annotation.
-- A branch to `*+4` and the like cannot be followed.
+- A branch to `*+4` is followed only as the conditional return it
+  usually is: a short branch (`beq.s *+4`) over an instruction that is
+  certain to be one word (`rts`). Any other branch to `*+N` is not.
 - Recursive macros, macro features other than those listed above, `iif`,
   ColdFire instructions, and the directives of Macro Assembler AS
   (`switch`, `irpc`, `:=`) are reported as errors.

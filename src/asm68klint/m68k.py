@@ -243,3 +243,26 @@ def normalise(statement: Statement) -> Statement:
         if size in sizes and stem in SIZED:
             statement.mnemonic, statement.size = stem, size
     return statement
+
+
+# Instructions that have a small number in the instruction word itself.
+QUICK = words("moveq addq subq asl asr lsl lsr rol ror roxl roxr trap")
+_PLAIN = re.compile(rf"-?\(\s*{REGISTER_PATTERN}\s*\)\+?", re.IGNORECASE)
+
+
+def is_one_word(statement: Statement) -> bool:
+    """True when an instruction is certain to take one word of the program.
+
+    That is one whose operands are registers, ``(an)``, ``(an)+`` or
+    ``-(an)``, or the small number of ``moveq``, ``addq`` and the shifts.
+    """
+    mnemonic = statement.mnemonic
+    if mnemonic not in INSTRUCTIONS or mnemonic in FLOAT | LOOPS | BRANCHES:
+        return False
+    if mnemonic in ("bsr", "jsr", "jmp", "bra", "movem", "link", "stop", "rtd"):
+        return False
+    for position, operand in enumerate(statement.operands):
+        quick = mnemonic in QUICK and position == 0 and operand.startswith("#")
+        if not (canonical(operand) or _PLAIN.fullmatch(operand) or quick):
+            return False
+    return True

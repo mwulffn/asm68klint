@@ -491,3 +491,50 @@ Main:	bsr	Second
 	bra	First
 """
     assert lint(text, INFER) == []
+
+
+def test_code_reached_only_by_its_address_is_checked_without_headers(lint):
+    text = """\
+Player:	jmp	.init(pc)
+	jmp	.play(pc)
+	dc.l	$4e754e75
+	jmp	.stop(pc)
+.init	lea	.handler(pc),a0
+	rts
+.play	moveq	#0,d0
+	rts
+.stop	move.l	d2,-(sp)
+	rts
+.handler
+	jsr	(a1)
+	rts
+	moveq	#0,d3
+	rts
+"""
+    assert lint(text, INFER) == [
+        (
+            "main.s:10: error: the stack is not balanced when code called in Player"
+            " returns"
+        ),
+        (
+            "main.s:12: error: cannot analyse the indirect call jsr (a1); add a"
+            " lint: clobbers or lint: targets annotation"
+        ),
+        "main.s:14: warning: unreachable code in Player is not checked",
+    ]
+
+
+def test_a_short_branch_over_one_instruction(lint):
+    body = """\
+	tst.w	d0
+	beq.b	*+4
+	rts
+	moveq	#0,d1
+	bne.s	*+4
+	moveq	#1,d1
+	rts
+"""
+    assert lint(routine(body, "d1")) == []
+    for unsure in ("\tbeq\t*+4\n\trts\n", "\tbeq.s\t*+4\n\tmove.w\t#1,d1\n"):
+        found = lint(routine("\ttst.w\td0\n" + unsure + "\trts\n", "d1"))
+        assert "cannot analyse the indirect jump beq *+4" in found[0]

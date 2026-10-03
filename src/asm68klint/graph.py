@@ -17,7 +17,7 @@ from asm68klint.directives import (
 )
 from asm68klint.findings import Finding
 from asm68klint.flow import RETURNS, Call, Effect, Node, changed_by, direct_target
-from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
+from asm68klint.m68k import BRANCHES, LOOPS, is_instruction, is_one_word
 from asm68klint.platforms import Platform
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
@@ -128,6 +128,20 @@ def _jumps_to(node: Node) -> str | None:
     if node.kind != "code" or not jumps or not statement.operands:
         return None
     return direct_target(statement.operands[-1])
+
+
+def _skips_one(node: Node, graph: Graph) -> bool:
+    """True for a short branch to ``*+4`` over an instruction of one word.
+
+    ``beq.s *+4`` followed by ``rts`` is a way to write a conditional return.
+    Where the next instruction is, or may be, longer than a word, the branch
+    cannot be followed.
+    """
+    statement = node.statement
+    short = statement.size in ("s", "b") and statement.operands[-1:] == ("*+4",)
+    if not short or node.index + 2 > node.limit - 1:
+        return False
+    return is_one_word(graph.nodes[node.index + 1].statement)
 
 
 def _settle_local_calls(graph: Graph) -> None:
@@ -419,6 +433,8 @@ def _link(
                 go_to(target, kind)
         elif known:
             leave(f"the system call {text}", known, kind)
+        elif kind == "jump" and _skips_one(node, graph):
+            node.successors.append(node.index + 2)
         else:
             message = f"cannot analyse the indirect {kind} {text}; {ANNOTATE}"
             node.errors.append(("F001", message))
