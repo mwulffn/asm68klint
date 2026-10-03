@@ -56,8 +56,8 @@ class Header:
 
 
 def is_header_start(statement: Statement) -> bool:
-    """True for the ``;--`` line that opens a header."""
-    return statement.text.strip() == ";--"
+    """True for the line that opens a header: ``;--``, or ``|--`` or ``*--``."""
+    return statement.text.strip() in (";--", "|--", "*--")
 
 
 def described_registers(text: str) -> list[str]:

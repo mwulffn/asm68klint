@@ -1,14 +1,22 @@
 """The ``asm68klint`` command."""
 
 import argparse
+import json
 import sys
 import tomllib
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
-from asm68klint.linter import describe_files, free_registers, lint_files
+from asm68klint.fix import fix_files
+from asm68klint.linter import (
+    describe_files,
+    free_registers,
+    lint_files,
+    routine_effects,
+)
 from asm68klint.m68k import CPUS
 from asm68klint.options import DEFAULT_RESERVED, SYNTAXES
 from asm68klint.platforms import PLATFORMS
@@ -133,6 +141,19 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         help="list what every routine reads and changes, and do not lint",
     )
     parser.add_argument(
+        "--fix",
+        action="store_true",
+        help=(
+            "rewrite the Clobbers field of headers that are wrong and, with"
+            " --infer, give routines without a header one; do not lint"
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print findings, effects or free registers as JSON",
+    )
+    parser.add_argument(
         "--free",
         metavar="FILE:LINE",
         help="say which registers new code at that line may use, and do not lint",
@@ -170,8 +191,16 @@ def gather(options: argparse.Namespace) -> dict:
 def run(options: argparse.Namespace) -> int:
     """Lint as the options and the configuration file say."""
     settings = gather(options)
-    for name in ("select", "ignore"):
-        settings.pop(name, None) if options.effects or options.free else None
+    if options.effects or options.free or options.fix:
+        settings.pop("select", None)
+        settings.pop("ignore", None)
+    if options.fix:
+        for file, count in sorted(fix_files(options.files, **settings).items()):
+            print(f"{file}: {count} header{'s' if count > 1 else ''} written")
+        return 0
+    if options.effects and options.json:
+        print(json.dumps(routine_effects(options.files, **settings), indent=1))
+        return 0
     if options.effects:
         print(*describe_files(options.files, **settings), sep="\n")
         return 0
@@ -183,13 +212,22 @@ def run(options: argparse.Namespace) -> int:
         if found is None:
             raise ValueError(f"{options.free} is in no routine of the files given")
         title, free, busy = found
+        if options.json:
+            answer = {"routine": title, "free": sorted(free), "in_use": sorted(busy)}
+            print(json.dumps(answer))
+            return 0
         print(
             f"{options.free}: in {title}: free {format_list(free)};"
             f" in use {format_list(busy)}"
         )
         return 0
     findings = lint_files(options.files, **settings)
-    for finding in findings:
+    if options.json:
+        rows = [
+            {**asdict(finding), "severity": finding.severity} for finding in findings
+        ]
+        print(json.dumps(rows, indent=1))
+    for finding in () if options.json else findings:
         print(finding)
     return 1 if any(finding.severity == ERROR for finding in findings) else 0
 

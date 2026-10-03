@@ -468,19 +468,32 @@ def describe_files(paths: Iterable[Path], **settings: Any) -> list[str]:
     (with ``infer``), what its code does. The settings are those of
     ``make_options``.
     """
-    units, _ = read_units(paths, make_options(**settings))
     lines = []
+    for row in routine_effects(paths, **settings):
+        text = f"In {row['in']}; Out {row['out']}; Clobbers {row['clobbers']}"
+        if not row["header"]:
+            text = f"In {row['in']}; changes {row['clobbers']} (no header)"
+        lines.append(f"{row['file']}:{row['line']}: {row['name']}: {text}")
+    return lines
+
+
+def routine_effects(paths: Iterable[Path], **settings: Any) -> list[dict]:
+    """Return what every routine reads and changes, as data.
+
+    Each routine is a dict: ``file``, ``line``, ``name``, the register lists
+    ``in``, ``out`` and ``clobbers``, and ``header`` (False when the routine
+    has none and the lists were worked out from its code).
+    """
+    units, _ = read_units(paths, make_options(**settings))
+    rows = []
     for unit in units:
         for routine in unit.routines:
             header = routine.header
-            fields = {name: format_list(header.registers(name)) for name in FIELDS}
-            text = (
-                f"In {fields['In']}; Out {fields['Out']}; Clobbers {fields['Clobbers']}"
-            )
-            if routine.inferred:
-                text = f"In {fields['In']}; changes {fields['Clobbers']} (no header)"
-            lines.append(f"{header.file}:{header.line}: {header.title}: {text}")
-    return lines
+            row = {"file": header.file, "line": header.line, "name": header.title}
+            for name in FIELDS:
+                row[name.lower()] = format_list(header.registers(name))
+            rows.append({**row, "header": not routine.inferred})
+    return rows
 
 
 def free_registers(
