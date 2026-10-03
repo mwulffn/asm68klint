@@ -8,7 +8,7 @@ from typing import Any
 
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect, Node, State, analyse, step
-from asm68klint.graph import Graph, build_graph
+from asm68klint.graph import Graph, build_graph, refresh
 from asm68klint.header import FIELDS, Field
 from asm68klint.infer import find_starts, place_label
 from asm68klint.m68k import needs, read_registers, written_registers
@@ -40,6 +40,8 @@ class Unit:
     tables: dict[str, list[str]] = field(default_factory=dict)
     # The labels inside routines (not those they start at): where each is.
     homes: dict[str, int] = field(default_factory=dict)
+    # The graphs of the routines without headers, kept once they are built.
+    graphs: dict[int, Graph] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.routines, self.orphans = find_routines(self.statements, self.starts)
@@ -370,50 +372,80 @@ def check_processor(graph: Graph, cpu: str, fpu: bool) -> list[Finding]:
 
 
 def graphs(
-    units: list[Unit], options: Options, inferred: bool = False
+    units: list[Unit],
+    options: Options,
+    inferred: bool = False,
+    only: set[str] | None = None,
+    used: dict[str, set[str]] | None = None,
 ) -> Iterator[tuple[Routine, Graph]]:
-    """Build the graph of every routine, or of those without a header."""
+    """Build the graph of every routine, or of those without a header.
+
+    ``only`` names the routines wanted. ``used`` is filled in with the names
+    of the routines that each routine's code depends on.
+    """
     for unit in units:
         for routine, following in zip(unit.routines, [*unit.routines[1:], None]):
-            if routine.inferred or not inferred:
-                yield (
-                    routine,
-                    build_graph(
-                        routine,
-                        following,
-                        lambda name, unit=unit: resolve(
-                            name, unit, units, options.extern
-                        ),
-                        options.platform,
-                        options.symbols,
-                        unit.tables,
-                        unit.borrow if options.infer else None,
-                    ),
-                )
+            name = routine.header.name or ""
+            if (inferred and not routine.inferred) or (only and name not in only):
+                continue
+            if id(routine) in unit.graphs:  # built when it was worked out
+                refresh(unit.graphs[id(routine)])
+                yield routine, unit.graphs[id(routine)]
+                continue
+            needs: set[str] = set()
+
+            def find(
+                name: str, unit: Unit = unit, needs: set[str] = needs
+            ) -> Effect | str:
+                needs.add(name)
+                return resolve(name, unit, units, options.extern)
+
+            graph = build_graph(
+                routine,
+                following,
+                find,
+                options.platform,
+                options.symbols,
+                unit.tables,
+                unit.borrow if options.infer else None,
+            )
+            if used is not None:
+                after = {r.header.name or "" for r in graph.after.values() if r}
+                used[name] = needs | after
+            if routine.inferred:
+                unit.graphs[id(routine)] = graph
+            yield routine, graph
 
 
 def settle(units: list[Unit], options: Options) -> None:
     """Work out what the routines without headers read and change.
 
     What one does depends on what the routines it calls do, so this goes round
-    until nothing is added. The stack pointer is left out: a routine that
+    until nothing is added; a routine is looked at again only when one it
+    depends on has changed. The stack pointer is left out: a routine that
     leaves the stack unbalanced is reported itself, and its callers are
     checked as if it did not.
     """
     reserved = set(options.reserved)
+    used: dict[str, set[str]] = {}
     # What is changed first: what a routine reads of what it was given
     # depends on what the routines it calls change, and not the other way.
+    built = list(graphs(units, options, inferred=True, used=used))
     for name in ("Clobbers", "In"):
-        growing = True
-        while growing:
-            growing = False
-            for routine, graph in graphs(units, options, inferred=True):
+        stale: set[str] | None = None  # the routines to look at: None for all
+        while stale is None or stale:
+            grown: set[str] = set()
+            for routine, graph in built:
+                if stale is not None and routine.header.name not in stale:
+                    continue
+                refresh(graph)
                 summary, reads = examine(routine, graph, reserved, name)
                 found = reads.missing if name == "In" else summary.changed - {STACK}
                 field = routine.header.fields[name]
                 if not found <= set(field.registers):
                     field.registers = sorted(found | set(field.registers))
-                    growing = True
+                    grown.add(routine.header.name or "")
+            stale = {user for user, needs in used.items() if needs & grown}
 
 
 def read_units(

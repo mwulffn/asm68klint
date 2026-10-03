@@ -1,7 +1,7 @@
 """Build the control-flow graph of a routine."""
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from asm68klint.annotations import Annotation, parse_annotation
 from asm68klint.directives import (
@@ -47,6 +47,22 @@ class Graph:
     # For the end of each routine whose code is here (see ``Node.limit``): the
     # routine that follows it in the source.
     after: dict[int, Routine | None] = field(default_factory=dict)
+    folded: dict[str, str] | None = None
+    # The calls of other routines: the node, which of its calls, and the name
+    # of the routine or (for falling through into it) the routine itself.
+    links: list[tuple[int, int, str | Routine]] = field(default_factory=list)
+    resolve: Resolver | None = None
+
+    def whatever_case(self) -> dict[str, str]:
+        """Return the labels by their names in lower case, where that is one label."""
+        if self.folded is None:
+            counts: dict[str, list[str]] = {}
+            for label in self.labels:
+                counts.setdefault(label.lower(), []).append(label)
+            self.folded = {
+                low: names[0] for low, names in counts.items() if len(names) == 1
+            }
+        return self.folded
 
 
 def build_graph(
@@ -80,10 +96,27 @@ def build_graph(
             if found and id(found[0]) not in taken:
                 taken.add(id(found[0]))
                 collector.take(*found, borrowed=True)
+    graph.resolve = resolve
     for node in graph.nodes:
         _link(node, graph, routine, resolve, platform, tables or {})
     _settle_local_calls(graph)
     return graph
+
+
+def refresh(graph: Graph) -> None:
+    """Look up again what the routines a graph's code calls do.
+
+    For when that has changed since the graph was built: what routines
+    without headers do is worked out in rounds.
+    """
+    for index, position, target in graph.links:
+        calls = graph.nodes[index].calls
+        effect = target.effect if isinstance(target, Routine) else None
+        if isinstance(target, str) and graph.resolve:
+            effect = graph.resolve(target)
+        if isinstance(effect, Effect):
+            calls[position] = replace(calls[position], effect=effect)
+    _settle_local_calls(graph)
 
 
 def _jumps_to(node: Node) -> str | None:
@@ -106,7 +139,9 @@ def _settle_local_calls(graph: Graph) -> None:
     callers = [node for node in graph.nodes if node.local_calls]
     if not callers:
         return
-    outside = {node.index: list(node.calls) for node in callers}
+    outside = {
+        node.index: [call for call in node.calls if not call.local] for node in callers
+    }
     names = {index: label for label, index in graph.labels.items()}
     changed = {index: frozenset() for node in callers for index in node.local_calls}
     graph.local_entries = set(changed)
@@ -118,6 +153,7 @@ def _settle_local_calls(graph: Graph) -> None:
                 Call(
                     f"the call to {names[index].removeprefix(node.scope)}",
                     Effect(changed[index]),
+                    local=True,
                 )
                 for index in node.local_calls
             ]
@@ -304,6 +340,7 @@ def _link(
             node.successors.append(index)
         elif following:
             via = f"falling through into {following.header.title}"
+            graph.links.append((node.index, len(node.calls), following))
             node.calls.append(Call(via, following.effect, tail=True))
             node.exit = node.exit or "tail"
         else:
@@ -317,9 +354,7 @@ def _link(
         """
         name = label_key(node.scope, target)
         if name not in graph.labels:
-            same = [label for label in graph.labels if label.lower() == name.lower()]
-            if len(same) == 1:
-                return same[0]
+            return graph.whatever_case().get(name.lower(), name)
         return name
 
     def leave(via: str, effect: Effect | set[str], kind: str) -> None:
@@ -348,6 +383,7 @@ def _link(
                 ("F001", f"cannot analyse the {kind} to {target}: {found}")
             )
         else:
+            graph.links.append((node.index, len(node.calls), target))
             leave(f"the {kind} to {target}", found, kind)
 
     def transfer(kind: str) -> None:

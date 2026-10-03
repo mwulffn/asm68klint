@@ -29,7 +29,7 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="asm68klint",
         description=(
-            "Check the routine headers of 68000 assembly source (vasm, Motorola"
+            "Check the routine headers of 68000-family assembly source (vasm, Motorola"
             " syntax) against what the code does to registers."
         ),
     )

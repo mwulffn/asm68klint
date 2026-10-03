@@ -87,6 +87,7 @@ class Call:
     via: str  # for messages: "the call to Foo"
     effect: Effect
     tail: bool = False
+    local: bool = False  # a call of code in the same routine
 
     @property
     def registers(self) -> frozenset[str]:
