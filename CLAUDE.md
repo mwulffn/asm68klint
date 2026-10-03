@@ -64,7 +64,7 @@ Features are judged by that use first (the user, 2026-10-03: "the value
 
 ## What public code showed (2026-10-03)
 
-About 600,000 lines were linted with `--infer`: an Amiga module player
+About 700,000 lines were linted with `--infer`: an Amiga module player
 (188,000 lines, AsmOne style), ProTracker, a demo, an emulator's test
 suite, an Atari source collection (a sample of 400 files), EmuTOS and
 SGDK (GNU assembler), a transcoded arcade game (GNU assembler), a Sega
