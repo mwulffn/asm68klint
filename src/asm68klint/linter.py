@@ -1,17 +1,18 @@
 """Lint a set of assembly source files."""
 
 import itertools
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
-from asm68klint.header import Field
+from asm68klint.header import FIELDS, Field
+from asm68klint.infer import find_starts
 from asm68klint.reader import read_source
 from asm68klint.reads import Reads, check_reads
-from asm68klint.registers import STACK, canonical
+from asm68klint.registers import STACK, canonical, format_list
 from asm68klint.routines import Routine, check_label, check_orphans, find_routines
 from asm68klint.rules import chosen
 from asm68klint.source import Statement, is_local, problem
@@ -27,13 +28,16 @@ class Unit:
     """One source file given on the command line, with all it includes."""
 
     statements: list[Statement]
+    # The labels that start a routine without a header; None if there may be
+    # no such routines.
+    starts: set[str] | None = None
     routines: list[Routine] = field(default_factory=list)
     orphans: list[Statement] = field(default_factory=list)
     labels: set[str] = field(default_factory=set)
     exports: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
-        self.routines, self.orphans = find_routines(self.statements)
+        self.routines, self.orphans = find_routines(self.statements, self.starts)
         for statement in self.statements:
             if statement.label:
                 self.labels.add(statement.label)
@@ -253,17 +257,25 @@ def check_paths(
         report(culprit.statement, "R004", message)
 
 
-def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Finding]:
-    """Compare what a routine does to registers with what its header declares."""
-    header = routine.header
-    title = header.title
+def examine(
+    routine: Routine, graph: Graph, reserved: set[str]
+) -> tuple[Summary, Reads]:
+    """Follow a routine's code in every configuration."""
     summary = Summary()
     reads = Reads()
     for choices in configurations(graph.nodes):
         states = analyse(graph.nodes, choices)
         check_paths(routine, graph, states, reserved, summary)
-        if not header.problems:
+        if not routine.header.problems:
             check_reads(routine, graph, choices, reserved, reads)
+    return summary, reads
+
+
+def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Finding]:
+    """Compare what a routine does to registers with what its header declares."""
+    header = routine.header
+    title = header.title
+    summary, reads = examine(routine, graph, reserved)
     findings = header.problems + routine.problems + check_label(routine)
     findings += (
         graph.problems
@@ -295,35 +307,90 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
     return findings
 
 
+def graphs(
+    units: list[Unit], inferred: bool = False
+) -> Iterator[tuple[Routine, Graph]]:
+    """Build the graph of every routine, or of those without a header."""
+    for unit in units:
+        for routine, following in zip(unit.routines, [*unit.routines[1:], None]):
+            if routine.inferred or not inferred:
+                yield (
+                    routine,
+                    build_graph(
+                        routine,
+                        following,
+                        lambda name, unit=unit: resolve(name, unit, units),
+                    ),
+                )
+
+
+def settle(units: list[Unit], reserved: set[str]) -> None:
+    """Work out what the routines without headers read and change.
+
+    What one does depends on what the routines it calls do, so this goes round
+    until nothing is added. The stack pointer is left out: a routine that
+    leaves the stack unbalanced is reported itself, and its callers are
+    checked as if it did not.
+    """
+    growing = True
+    while growing:
+        growing = False
+        for routine, graph in graphs(units, inferred=True):
+            summary, reads = examine(routine, graph, reserved)
+            fields = routine.header.fields
+            found = {"In": reads.missing, "Clobbers": summary.changed - {STACK}}
+            for name, registers in found.items():
+                if not registers <= set(fields[name].registers):
+                    fields[name].registers = sorted(
+                        registers | set(fields[name].registers)
+                    )
+                    growing = True
+
+
+def read_units(
+    paths: Iterable[Path],
+    reserved: set[str],
+    include_dirs: Iterable[Path] = (),
+    infer: bool = False,
+) -> tuple[list[Unit], set[Finding]]:
+    """Read the source files and find their routines."""
+    findings: set[Finding] = set()
+    sources = []
+    for path in paths:
+        statements, problems = read_source(Path(path), include_dirs)
+        findings.update(problems)
+        sources.append(statements)
+    starts = find_starts(sources) if infer else [None] * len(sources)
+    units = [Unit(*pair) for pair in zip(sources, starts, strict=True)]
+    if infer:
+        settle(units, reserved)
+    return units, findings
+
+
 def lint_files(
     paths: Iterable[Path],
     reserved: Iterable[str] = DEFAULT_RESERVED,
     include_dirs: Iterable[Path] = (),
     select: Iterable[str] = (),
     ignore: Iterable[str] = (),
+    infer: bool = False,
 ) -> list[Finding]:
     """Lint the given source files together and return the sorted findings.
 
     ``reserved`` names the registers that may not be written without a
     ``lint: allow`` annotation. ``include_dirs`` are searched for include files.
     ``select`` and ``ignore`` choose the rules to report, by code or by the
-    beginning of one; nothing selected means all of them.
+    beginning of one; nothing selected means all of them. With ``infer``, code
+    need not have headers: what a routine without one does is worked out.
     """
     codes = chosen(select, ignore)
     reserved = {canonical(name) or name for name in reserved}
-    findings: set[Finding] = set()
-    units = []
-    for path in paths:
-        statements, problems = read_source(Path(path), include_dirs)
-        findings.update(problems)
-        units.append(Unit(statements))
+    units, findings = read_units(paths, reserved, include_dirs, infer)
     for unit in units:
-        findings.update(check_orphans(unit.orphans))
-        for routine, following in zip(unit.routines, [*unit.routines[1:], None]):
-            graph = build_graph(
-                routine, following, lambda name, unit=unit: resolve(name, unit, units)
-            )
-            findings.update(check_routine(routine, graph, reserved))
+        if not infer:
+            findings.update(check_orphans(unit.orphans))
+    for routine, graph in graphs(units):
+        findings.update(check_routine(routine, graph, reserved))
     return sorted(
         (finding for finding in findings if finding.code in codes),
         key=lambda finding: (
@@ -333,3 +400,30 @@ def lint_files(
             finding.message,
         ),
     )
+
+
+def describe_files(
+    paths: Iterable[Path],
+    reserved: Iterable[str] = DEFAULT_RESERVED,
+    include_dirs: Iterable[Path] = (),
+    infer: bool = False,
+) -> list[str]:
+    """Return a line for every routine saying what it reads and changes.
+
+    For a routine with a header that is what the header says; for one without
+    (with ``infer``), what its code does.
+    """
+    reserved = {canonical(name) or name for name in reserved}
+    units, _ = read_units(paths, reserved, include_dirs, infer)
+    lines = []
+    for unit in units:
+        for routine in unit.routines:
+            header = routine.header
+            fields = {name: format_list(header.registers(name)) for name in FIELDS}
+            text = (
+                f"In {fields['In']}; Out {fields['Out']}; Clobbers {fields['Clobbers']}"
+            )
+            if routine.inferred:
+                text = f"In {fields['In']}; changes {fields['Clobbers']} (no header)"
+            lines.append(f"{header.file}:{header.line}: {header.title}: {text}")
+    return lines

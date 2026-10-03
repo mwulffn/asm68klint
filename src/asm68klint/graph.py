@@ -10,6 +10,7 @@ from asm68klint.directives import (
     END_IF,
     IF,
     condition,
+    decided,
     is_data,
     is_ignored,
 )
@@ -67,14 +68,18 @@ class _Collector:
         # of that expansion: the expansion's number and the annotations.
         self.spread: tuple[int, dict[str, Annotation]] = (0, {})
         # Open conditionals: the fork that still has to learn where to go when
-        # its condition fails (None after an else), and the skips so far.
-        self.conditionals: list[tuple[Node | None, list[Node]]] = []
+        # its condition fails (None after an else), and the skips so far. For
+        # one that the text decides there is no fork: its branches are taken
+        # or left out here, and it is [a branch was taken, this one is].
+        self.conditionals: list[tuple[Node | None, list[Node]] | list[bool]] = []
 
     def add(self, statement: Statement) -> None:
         """Take in the next statement of the routine."""
+        mnemonic = statement.mnemonic
+        if self._left_out() and mnemonic not in IF | ELSE | ELSE_IF | END_IF:
+            return
         self._read_annotation(statement)
         self._read_label(statement)
-        mnemonic = statement.mnemonic
         if mnemonic is None or statement.is_macro_call or is_ignored(statement):
             return
         if mnemonic in IF | ELSE | ELSE_IF | END_IF:
@@ -97,8 +102,13 @@ class _Collector:
 
     def finish(self) -> None:
         """Close the conditionals that the routine leaves open."""
-        for waiting, skips in self.conditionals:
-            self._close(waiting, skips)
+        for item in self.conditionals:
+            if isinstance(item, tuple):
+                self._close(*item)
+
+    def _left_out(self) -> bool:
+        """True inside a branch that a decided conditional does not take."""
+        return any(isinstance(item, list) and not item[1] for item in self.conditionals)
 
     def _node(self, statement: Statement, kind: str) -> Node:
         nodes = self.graph.nodes
@@ -131,9 +141,23 @@ class _Collector:
         """
         mnemonic = statement.mnemonic
         if mnemonic in IF:
-            self.conditionals.append((self._fork(statement), []))
+            outcome = decided(statement)
+            if self._left_out():
+                self.conditionals.append([True, False])
+            elif outcome is None:
+                self.conditionals.append((self._fork(statement), []))
+            else:
+                self.conditionals.append([outcome, outcome])
         elif not self.conditionals:
             return
+        elif isinstance(self.conditionals[-1], list):
+            item = self.conditionals[-1]
+            if mnemonic in END_IF:
+                self.conditionals.pop()
+            else:  # an elif that the text does not decide counts as true
+                holds = mnemonic in ELSE or decided(statement) is not False
+                item[1] = not item[0] and holds
+                item[0] = item[0] or item[1]
         elif mnemonic in END_IF:
             self._close(*self.conditionals.pop())
         else:
@@ -183,6 +207,8 @@ def _link(
             node.falls_off = True
 
     def key(target: str) -> str:
+        if "\\" in target:  # Global\.local
+            return target.replace("\\", "")
         return node.scope + target if is_local(target) else target
 
     def leave(via: str, effect: Effect | set[str], kind: str) -> None:

@@ -47,6 +47,11 @@ def problem(statement: Statement, code: str, message: str) -> Finding:
     return Finding(statement.file, statement.line, code, message)
 
 
+# A label as an operand: a name, a local label (``.name``, ``.1``, ``name$``,
+# ``1$``), or a local label of another routine (``Global\.local``).
+LABEL_PATTERN = r"(?:[A-Za-z_]\w*\\)?(?:[A-Za-z_.][\w.]*\$?|\d+\$)"
+
+
 def is_local(label: str) -> bool:
     """True for a local label (``.name`` or ``name$``)."""
     return label.startswith(".") or label.endswith("$")

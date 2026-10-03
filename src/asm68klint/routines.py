@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from asm68klint.annotations import parse_annotation
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect
-from asm68klint.header import Header, is_header_start, parse_header
+from asm68klint.header import FIELDS, Field, Header, is_header_start, parse_header
 from asm68klint.m68k import is_instruction
 from asm68klint.source import Statement, is_local
 
@@ -19,6 +19,9 @@ class Routine:
     # Reserved registers the header's annotations allow the routine to write.
     allowed: set[str] = field(default_factory=set)
     problems: list[Finding] = field(default_factory=list)
+    # True for a routine without a header: what its fields hold was worked
+    # out from its code.
+    inferred: bool = False
 
     @property
     def declared(self) -> set[str]:
@@ -29,6 +32,8 @@ class Routine:
     def effect(self) -> Effect:
         """What a call of the routine does, as its header has it."""
         results = self.header.registers("Out")
+        if self.inferred:  # which of the registers it changes are results is not known
+            results = self.header.registers("Clobbers")
         return Effect(
             frozenset(self.declared),
             frozenset(self.header.registers("In")),
@@ -36,19 +41,33 @@ class Routine:
         )
 
 
+def headerless(statement: Statement) -> Routine:
+    """Return a routine without a header that starts at a statement."""
+    name = statement.label or "(the start of the file)"
+    header = Header(statement.file, statement.line, name)
+    for name in FIELDS:
+        header.fields[name] = Field(statement.line, "-")
+    return Routine(header, inferred=True)
+
+
 def find_routines(
-    statements: list[Statement],
+    statements: list[Statement], starts: set[str] | None = None
 ) -> tuple[list[Routine], list[Statement]]:
     """Split a file into routines, one per header.
 
-    Also returns the statements that come before the first header.
+    Also returns the statements that come before the first header. With
+    ``starts``, code need not have a header: a routine without one begins at
+    each of those labels, and at the first instruction of the file.
     """
     routines: list[Routine] = []
     orphans: list[Statement] = []
     position = 0
+    labelled = True  # the last routine has had its label
     while position < len(statements):
         statement = statements[position]
+        is_global = bool(statement.label) and not is_local(statement.label or "")
         if is_header_start(statement):
+            labelled = False
             end = position + 1
             while end < len(statements) and statements[end].is_comment:
                 end += 1
@@ -57,6 +76,12 @@ def find_routines(
             routines.append(routine)
             position = end
             continue
+        if starts is not None and (
+            (statement.label in starts and labelled)
+            or (not routines and is_instruction(statement.mnemonic))
+        ):
+            routines.append(headerless(statement))
+        labelled = labelled or is_global
         (routines[-1].body if routines else orphans).append(statement)
         position += 1
     return routines, orphans
@@ -101,6 +126,8 @@ def check_label(routine: Routine) -> list[Finding]:
     """Check that the header is followed by the label it names."""
     header = routine.header
     line = header.line
+    if routine.inferred:
+        return []
     for statement in routine.body:
         line = statement.line
         if statement.label and not is_local(statement.label):

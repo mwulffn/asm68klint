@@ -15,6 +15,25 @@ MAX_DEPTH = 50
 _ESCAPE = re.compile(r"\\([@#0-9])")
 
 
+def find_file(directory: Path, name: str) -> Path | None:
+    """Find a file by a name written for a file system that ignores case.
+
+    The name may use either slash, and what comes before a colon (an Amiga
+    volume or assign) is dropped.
+    """
+    parts = name.replace("\\", "/").rpartition(":")[2].split("/")
+    if (directory / "/".join(parts)).is_file():
+        return directory / "/".join(parts)
+    for part in parts:
+        if not directory.is_dir():
+            return None
+        names = {entry.name.lower(): entry for entry in directory.iterdir()}
+        if part.lower() not in names:
+            return None
+        directory = names[part.lower()]
+    return directory if directory.is_file() else None
+
+
 class Reader:
     """Reads one source file given on the command line and all it includes."""
 
@@ -77,7 +96,8 @@ class Reader:
         if mnemonic == "include" and operands:
             self._include(statement, directory)
         elif mnemonic == "incdir" and operands:
-            self.include_dirs.append(directory / operands[0].strip("\"'"))
+            name = operands[0].strip("\"'").rpartition(":")[2]
+            self.include_dirs.append(directory / name)
         elif mnemonic in ("equr", "reg") and statement.label and operands:
             self.aliases[statement.label] = operands[0]
             names = "|".join(map(re.escape, self.aliases))
@@ -93,8 +113,9 @@ class Reader:
         """Read an include file, looking next to the including file first."""
         name = statement.operands[0].strip("\"'")
         for candidate in [directory, Path(), *self.include_dirs]:
-            if (candidate / name).is_file():
-                self.read_file(candidate / name)
+            found = find_file(candidate, name)
+            if found:
+                self.read_file(found)
                 return
         self.findings.append(
             problem(statement, "S001", f"cannot find the include file {name!r}")

@@ -17,9 +17,10 @@ from pathlib import Path
 OWN_FILE = "asm68klint.toml"
 PROJECT_FILE = "pyproject.toml"
 KEYS = ("reserved", "include-dirs", "select", "ignore")
+SWITCHES = ("infer",)
 
 
-def read_config(path: Path) -> dict[str, list[str]] | None:
+def read_config(path: Path) -> dict | None:
     """Read the settings in a file; None if a pyproject.toml has none for us.
 
     Raises ValueError for a setting that is unknown or not a list of strings.
@@ -31,6 +32,10 @@ def read_config(path: Path) -> dict[str, list[str]] | None:
         if settings is None:
             return None
     for key, value in settings.items():
+        if key in SWITCHES and isinstance(value, bool):
+            continue
+        if key in SWITCHES:
+            raise ValueError(f"{path}: {key} must be true or false")
         if key not in KEYS:
             raise ValueError(f"{path}: unknown setting {key!r}")
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
@@ -42,7 +47,7 @@ def read_config(path: Path) -> dict[str, list[str]] | None:
     return settings
 
 
-def find_config(start: Path) -> dict[str, list[str]]:
+def find_config(start: Path) -> dict:
     """Return the settings of the nearest configuration file, or none."""
     for directory in [start.resolve(), *start.resolve().parents]:
         for name in (OWN_FILE, PROJECT_FILE):

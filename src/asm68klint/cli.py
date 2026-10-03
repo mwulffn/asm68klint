@@ -8,7 +8,7 @@ from pathlib import Path
 
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
-from asm68klint.linter import DEFAULT_RESERVED, lint_files
+from asm68klint.linter import DEFAULT_RESERVED, describe_files, lint_files
 from asm68klint.registers import canonical
 from asm68klint.rules import RULES
 
@@ -57,6 +57,19 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             " pyproject.toml with a [tool.asm68klint] table)"
         ),
     )
+    parser.add_argument(
+        "--infer",
+        action="store_true",
+        help=(
+            "code need not have routine headers: what a routine without one"
+            " reads and changes is worked out from its code"
+        ),
+    )
+    parser.add_argument(
+        "--effects",
+        action="store_true",
+        help="list what every routine reads and changes, and do not lint",
+    )
     parser.add_argument("--rules", action="store_true", help="list the rules and exit")
     options = parser.parse_args(arguments)
     if not options.files and not options.rules:
@@ -79,12 +92,18 @@ def run(options: argparse.Namespace) -> int:
     reserved = [canonical(name) for name in names]
     if None in reserved:
         raise ValueError(f"{names[reserved.index(None)]} is not a register")
+    include_dirs = [*options.include_dir, *map(Path, settings.get("include-dirs", []))]
+    infer = options.infer or settings.get("infer", False)
+    if options.effects:
+        print(*describe_files(options.files, reserved, include_dirs, infer), sep="\n")
+        return 0
     findings = lint_files(
         options.files,
         reserved,
-        [*options.include_dir, *map(Path, settings.get("include-dirs", []))],
+        include_dirs,
         split(options.select, settings.get("select", [])),
         split(options.ignore, settings.get("ignore", [])),
+        infer,
     )
     for finding in findings:
         print(finding)

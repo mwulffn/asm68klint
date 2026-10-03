@@ -1,6 +1,7 @@
 """Register names and register lists."""
 
 import re
+from collections.abc import Iterable
 
 DATA = tuple(f"d{n}" for n in range(8))
 ADDRESS = tuple(f"a{n}" for n in range(8))
@@ -35,3 +36,17 @@ def parse_list(text: str) -> list[str] | None:
             return None
         found.update(REGISTERS[ends[0] : ends[-1] + 1])
     return [register for register in REGISTERS if register in found]
+
+
+def format_list(registers: Iterable[str]) -> str:
+    """Write registers as a list such as ``d0-d2/a0``; ``-`` for none."""
+    parts = []
+    for group in (DATA, ADDRESS):
+        run: list[str] = []
+        for register in [*group, ""]:
+            if register in registers:
+                run.append(register)
+            elif run:
+                parts.append(run[0] if len(run) == 1 else f"{run[0]}-{run[-1]}")
+                run = []
+    return "/".join(parts) or "-"

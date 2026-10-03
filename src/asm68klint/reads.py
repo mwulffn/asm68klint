@@ -33,6 +33,8 @@ class Reads:
 
     findings: set[Finding] = field(default_factory=set)
     used: set[str] = field(default_factory=set)  # inputs that are read
+    # Registers read that were not written first and are not listed as inputs.
+    missing: set[str] = field(default_factory=set)
 
 
 def is_save(node: Node) -> bool:
@@ -157,6 +159,8 @@ def check_reads(
             needed
         )
         for register, why, finding in lost_values(nodes, node, routine, marks):
+            if why == ENTRY and finding.code == "R008":
+                reads.missing.add(register)
             if (register, why) not in seen:
                 seen.add((register, why))
                 reads.findings.add(finding)

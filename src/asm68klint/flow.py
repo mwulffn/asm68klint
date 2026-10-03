@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from asm68klint.m68k import destinations, written_registers
 from asm68klint.registers import STACK, canonical, parse_list
-from asm68klint.source import Statement
+from asm68klint.source import LABEL_PATTERN, Statement
 
 # A stack slot is (size in bytes, what it holds). It holds either the entry
 # value of the named register, or None for anything else. A slot of size 0
@@ -33,10 +33,10 @@ _STACK_OFFSET = re.compile(
     rf"{_AMOUNT}\((?:sp|a7)\)|\({_AMOUNT},(?:sp|a7)\)", re.IGNORECASE
 )
 _IMMEDIATE = re.compile(rf"#{_AMOUNT}")
-_NAME = r"\.?[A-Za-z_]\w*\$?"
 _TARGET = re.compile(
-    rf"({_NAME})(?:\.[wl])?(?:\(pc\))?|\(({_NAME}),pc\)", re.IGNORECASE
+    rf"({LABEL_PATTERN})(?:\(pc\))?|\(({LABEL_PATTERN}),pc\)", re.IGNORECASE
 )
+_SIZE_SUFFIX = re.compile(r"(?<=.)\.[wlsb]$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,9 @@ class Node:
 def direct_target(operand: str) -> str | None:
     """Return the label a branch, jump or call goes to, or None if indirect."""
     match = _TARGET.fullmatch(operand)
-    return match.group(1) or match.group(2) if match else None
+    if not match or canonical(operand):
+        return None
+    return _SIZE_SUFFIX.sub("", match.group(1) or match.group(2))
 
 
 def join(first: State | None, second: State) -> State:

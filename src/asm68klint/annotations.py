@@ -10,11 +10,11 @@ from dataclasses import dataclass
 
 from asm68klint.findings import Finding
 from asm68klint.registers import parse_list
-from asm68klint.source import Statement
+from asm68klint.source import LABEL_PATTERN, Statement
 
 KEYWORDS = ("clobbers", "targets", "allow")
 _ANNOTATION = re.compile(r"\blint:\s*(\S+)\s*(.*)", re.IGNORECASE)
-_LABEL = re.compile(r"\.?[A-Za-z_]\w*\$?")
+_LABEL = re.compile(LABEL_PATTERN)
 
 
 @dataclass
