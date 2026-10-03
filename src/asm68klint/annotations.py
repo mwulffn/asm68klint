@@ -3,6 +3,8 @@
 ``clobbers``  the registers changed by the call or jump on that line
 ``targets``   the labels an indirect call or jump may go to
 ``allow``     reserved registers that may be written
+``inline``    the code called takes the data that follows the call and
+              returns after it
 """
 
 import re
@@ -12,7 +14,7 @@ from asm68klint.findings import Finding
 from asm68klint.registers import parse_list
 from asm68klint.source import LABEL_PATTERN, Statement
 
-KEYWORDS = ("clobbers", "targets", "allow")
+KEYWORDS = ("clobbers", "targets", "allow", "inline")
 _ANNOTATION = re.compile(r"\blint:\s*(\S+)\s*(.*)", re.IGNORECASE)
 _LABEL = re.compile(LABEL_PATTERN)
 
@@ -36,6 +38,8 @@ def parse_annotation(statement: Statement) -> Annotation | Finding | None:
     annotation = Annotation(keyword, set(), [])
     if keyword not in KEYWORDS:
         message = f"unknown lint annotation {match.group(1)!r}"
+    elif keyword == "inline":
+        return annotation
     elif keyword == "targets" and all(_LABEL.fullmatch(item) for item in items):
         annotation.labels = items
         return annotation

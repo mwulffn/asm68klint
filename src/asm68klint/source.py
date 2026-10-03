@@ -49,7 +49,7 @@ def problem(statement: Statement, code: str, message: str) -> Finding:
 
 # A label as an operand: a name, a local label (``.name``, ``.1``, ``name$``,
 # ``1$``), or a local label of another routine (``Global\.local``).
-LABEL_PATTERN = r"(?:[A-Za-z_]\w*\\)?(?:[A-Za-z_.][\w.]*\$?|\d+\$)"
+LABEL_PATTERN = r"(?:[A-Za-z_]\w*\\)?(?:[A-Za-z_.@][\w.@?]*\$?|\d+\$)"
 
 
 # A label whose name starts with this is neither the label of a routine nor
@@ -71,8 +71,8 @@ def label_key(scope: str, label: str) -> str:
 
 
 def is_local(label: str) -> bool:
-    """True for a local label (``.name`` or ``name$``)."""
-    return label.startswith(".") or label.endswith("$")
+    """True for a local label (``.name``, ``name$`` or, in asm68k, ``@name``)."""
+    return label.startswith((".", "@")) or label.endswith("$")
 
 
 def split_comment(text: str) -> tuple[str, str]:

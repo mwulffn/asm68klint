@@ -251,3 +251,115 @@ def test_atari_traps(lint):
     assert lint(routine(body, "d0-d2/a0-a2"), options) == [
         "main.s:11: warning: d2 is read after the system call trap #14 clobbered it"
     ]
+
+
+def test_a_routine_that_is_in_none_of_the_files(lint):
+    source = routine("\tjsr\t_printf\n\trts\n", "d0-d1/a0-a1")
+    assert lint(source) == [
+        (
+            "main.s:7: error: cannot analyse the call to _printf: no routine of that"
+            " name in the files given"
+        )
+    ]
+    assert lint(source, {"extern": "d0-d1/a0-a1"}) == []
+    assert lint(routine("\tjsr\t_printf\n\trts\n", "d0"), {"extern": "d0"}) == []
+
+
+def test_names_given_as_defined_decide_conditionals(lint):
+    body = """\
+	ifd	DEBUG
+	moveq	#0,d0
+	endc
+	ifne	LEVEL-2
+	moveq	#0,d1
+	endc
+	rts
+"""
+    both = lint(routine(body))
+    assert len(both) == 2
+    assert lint(routine(body), {"undefine": ["DEBUG"], "define": ["LEVEL=2"]}) == []
+    assert lint(routine(body, "d0"), {"define": ["DEBUG", "LEVEL=2"]}) == []
+    assert lint(routine(body, "d0-d1"), {"define": ["DEBUG=0", "LEVEL=3"]}) == []
+
+
+def test_a_call_that_takes_the_data_after_it(lint):
+    body = """\
+	jsr	Print		; lint: inline
+	dc.b	"hello",0
+	even
+	moveq	#0,d1
+	rts
+"""
+    helper = ";--\n; Print\n; In: -\n; Out: -\n; Clobbers: -\nPrint:\trts\n"
+    assert lint(routine(body, "d1") + helper) == []
+    assert lint(routine(body.replace("; lint: inline", ""), "d1") + helper) == [
+        "main.s:8: error: execution runs into data in Foo",
+        "main.s:10: warning: unreachable code in Foo is not checked",
+    ]
+
+
+def test_an_annotation_in_a_macro_holds_for_every_use(lint):
+    macro = """\
+SAY	macro
+	jsr	Print		; lint: inline
+	dc.b	\\1,0
+	even
+	endm
+"""
+    helper = ";--\n; Print\n; In: -\n; Out: -\n; Clobbers: -\nPrint:\trts\n"
+    body = '\tSAY\t"one"\n\tSAY\t"two"\n\trts\n'
+    assert lint(macro + routine(body) + helper) == []
+
+
+def test_amiga_functions_that_keep_every_register(lint):
+    body = """\
+	lea	4(a2),a0
+	jsr	_LVOWaitBlit(a6)
+	move.l	a0,(a2)
+	jsr	_LVOForbid(a6)
+	move.l	a0,(a2)
+	rts
+"""
+    options = {"reserved": [], "platform": "amiga", "select": ["F", "R007"]}
+    assert lint(routine(body, "a0"), options) == []
+
+
+def test_an_instruction_in_the_first_column(lint):
+    source = routine("move.l\t#1,d0\ndc.w\t$4e71\nrts\n", "d0")
+    assert lint(source) == []
+
+
+def test_nops_written_as_data_are_code(lint):
+    body = """\
+	moveq	#0,d0
+	dc.w	$4e71,$4E71
+	dcb.w	96,$4e71
+	ds.w	8,$4E71
+	rts
+"""
+    assert lint(routine(body, "d0")) == []
+
+
+def test_a_label_that_differs_only_in_case_is_found(lint):
+    body = """\
+	tst.w	d0
+	bne	.No_restore
+	moveq	#0,d0
+.No_Restore
+	rts
+"""
+    assert lint(routine(body, "d0")) == []
+
+
+def test_directives_that_name_the_processor_are_passed_over(lint):
+    assert lint(routine("\tmc68020\n\textb.l\td0\n\tmc68000\n\trts\n", "d0")) == []
+
+
+def test_an_include_is_looked_for_next_to_the_file_given_too(tmp_path: Path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "prog").mkdir()
+    (tmp_path / "shared.i").write_text("; nothing\n")
+    (tmp_path / "lib" / "part.i").write_text('\tinclude\t"../shared.i"\n')
+    main = tmp_path / "prog" / "main.s"
+    main.write_text('\tinclude\t"../lib/part.i"\n')
+    assert lint_files([main]) == []

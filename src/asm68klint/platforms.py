@@ -18,6 +18,11 @@ _LIBRARY_CALL = re.compile(
 _TRAP = re.compile(r"#\$?0*([0-9a-f]+)", re.IGNORECASE)
 
 
+# Functions of the Amiga's libraries that keep every register: the system's
+# documentation says so of WaitBlit, and since Kickstart 2.04 of the other four.
+KEEP_ALL = ("Forbid", "Permit", "Disable", "Enable", "WaitBlit")
+
+
 def registers(text: str) -> frozenset[str]:
     """Return a set of registers from their names."""
     return frozenset(text.split())
@@ -31,8 +36,12 @@ def amiga_call(statement: Statement) -> Effect | None:
     """
     if statement.mnemonic not in ("jsr", "jmp") or len(statement.operands) != 1:
         return None
-    if not _LIBRARY_CALL.fullmatch(statement.operands[0]):
+    match = _LIBRARY_CALL.fullmatch(statement.operands[0])
+    if not match:
         return None
+    name = (match.group(1) or match.group(2)).removeprefix("_LVO")
+    if name in KEEP_ALL:
+        return Effect(frozenset(), registers("a6"))
     return Effect(registers("d0 d1 a0 a1"), registers("a6"), registers("d1 a0 a1"))
 
 

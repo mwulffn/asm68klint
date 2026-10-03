@@ -3,12 +3,12 @@
 from dataclasses import dataclass, field
 
 from asm68klint.annotations import parse_annotation
-from asm68klint.directives import code_label
+from asm68klint.directives import code_label, is_data
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect
 from asm68klint.header import FIELDS, Field, Header, is_header_start, parse_header
 from asm68klint.m68k import is_instruction
-from asm68klint.source import Statement, is_local
+from asm68klint.source import UNSCOPED, Statement, is_local
 
 
 @dataclass
@@ -44,7 +44,9 @@ class Routine:
 
 def headerless(statement: Statement) -> Routine:
     """Return a routine without a header that starts at a statement."""
-    name = statement.label or "(the start of the file)"
+    name = code_label(statement) or statement.label or "(the start of the file)"
+    if not code_label(statement) and not (statement.label or "").startswith(UNSCOPED):
+        name = "(the start of the file)"
     header = Header(statement.file, statement.line, name)
     for name in FIELDS:
         header.fields[name] = Field(statement.line, "-")
@@ -58,11 +60,13 @@ def find_routines(
 
     Also returns the statements that come before the first header. With
     ``starts``, code need not have a header: a routine without one begins at
-    each of those labels, and at the first instruction of the file.
+    each of those labels, and at the first instruction of the file (at the
+    label before it, if it has one).
     """
     routines: list[Routine] = []
     orphans: list[Statement] = []
     position = 0
+    first = 0  # where in the orphans the last label before any code is
     labelled = True  # the last routine has had its label
     while position < len(statements):
         statement = statements[position]
@@ -77,11 +81,19 @@ def find_routines(
             routines.append(routine)
             position = end
             continue
-        if starts is not None and (
-            (statement.label in starts and labelled)
-            or (not routines and is_instruction(statement.mnemonic))
-        ):
+        if starts is not None and statement.label in starts and labelled:
             routines.append(headerless(statement))
+        elif starts is not None and not routines:
+            if is_global:
+                first = len(orphans)
+            elif is_data(statement):
+                first = len(orphans) + 1
+            elif is_instruction(statement.mnemonic):
+                first = min(first, len(orphans))
+                begins = [*orphans[first:], statement][0]
+                routines.append(headerless(begins))
+                routines[-1].body = orphans[first:]
+                del orphans[first:]
         labelled = labelled or is_global
         (routines[-1].body if routines else orphans).append(statement)
         position += 1

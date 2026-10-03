@@ -1,6 +1,6 @@
 """The settings of a lint run."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +27,7 @@ class Options:
     extern: Effect | None
     cpu: str | None
     fpu: bool
+    symbols: Mapping[str, str | None]
 
 
 def make_options(
@@ -40,6 +41,8 @@ def make_options(
     extern: str | None = None,
     cpu: str | None = None,
     fpu: bool = False,
+    define: Iterable[str] = (),
+    undefine: Iterable[str] = (),
 ) -> Options:
     """Check the settings of a lint run and put them together.
 
@@ -56,6 +59,9 @@ def make_options(
     program is for (``68000`` to ``68060``): an instruction it has not is an
     error, and so is one of the floating point unit unless ``fpu`` says there
     is one. Without ``cpu`` every instruction of the family is taken.
+    ``define`` (``NAME`` or ``NAME=value``) and ``undefine`` (``NAME``) say
+    how conditional assembly that tests those names goes; a conditional on any
+    other name is checked both ways.
 
     Raises ValueError for a setting that makes no sense.
     """
@@ -69,6 +75,10 @@ def make_options(
         raise ValueError(f"{syntax!r} is not a syntax: {', '.join(SYNTAXES)}")
     if cpu not in (None, *CPUS):
         raise ValueError(f"{cpu!r} is not a processor: {', '.join(CPUS)}")
+    symbols: dict[str, str | None] = dict.fromkeys(undefine)
+    for item in define:
+        name, _, value = item.partition("=")
+        symbols[name] = value or "1"
     changed = None if extern in (None, "-") else parse_list(extern or "")
     if extern not in (None, "-") and changed is None:
         raise ValueError(f"{extern!r} is not a register list")
@@ -82,4 +92,5 @@ def make_options(
         None if extern is None else Effect(frozenset(changed or ())),
         cpu,
         fpu,
+        symbols,
     )

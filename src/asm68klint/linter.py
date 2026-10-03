@@ -357,6 +357,7 @@ def graphs(
                             name, unit, units, options.extern
                         ),
                         options.platform,
+                        options.symbols,
                     ),
                 )
 

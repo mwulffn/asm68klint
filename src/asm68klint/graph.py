@@ -1,6 +1,6 @@
 """Build the control-flow graph of a routine."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from asm68klint.annotations import Annotation, parse_annotation
@@ -21,7 +21,7 @@ from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
 from asm68klint.platforms import Platform
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
-from asm68klint.source import Statement, is_local, label_key
+from asm68klint.source import UNSCOPED, Statement, is_local, label_key
 
 # Looks up a routine by name: returns what a call of it does, or the reason it
 # cannot be found.
@@ -47,13 +47,14 @@ def build_graph(
     following: Routine | None,
     resolve: Resolver,
     platform: Platform | None = None,
+    symbols: Mapping[str, str | None] | None = None,
 ) -> Graph:
     """Turn the code of a routine into nodes linked by control flow.
 
     ``following`` is the routine that comes next in the source, which execution
     falls into when it runs past the end of this one.
     """
-    collector = _Collector(platform.silent if platform else frozenset())
+    collector = _Collector(platform.silent if platform else frozenset(), symbols)
     for statement in routine.body:
         collector.add(statement)
     collector.finish()
@@ -96,9 +97,14 @@ def _settle_local_calls(graph: Graph) -> None:
 class _Collector:
     """Creates the nodes of a routine and records its labels and annotations."""
 
-    def __init__(self, silent: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        silent: frozenset[str] = frozenset(),
+        symbols: Mapping[str, str | None] | None = None,
+    ) -> None:
         self.graph = Graph()
         self.silent = silent  # macros of a platform that emit nothing
+        self.symbols = symbols  # names the user has defined, or said are not
         self.scope = ""  # the last global label
         # Annotations waiting for the next instruction.
         self.pending: dict[str, Annotation] = {}
@@ -181,7 +187,7 @@ class _Collector:
         """
         mnemonic = statement.mnemonic
         if mnemonic in IF:
-            outcome = decided(statement)
+            outcome = decided(statement, self.symbols)
             if self._left_out():
                 self.conditionals.append([True, False])
             elif outcome is None:
@@ -195,7 +201,9 @@ class _Collector:
             if mnemonic in END_IF:
                 self.conditionals.pop()
             else:  # an elif that the text does not decide counts as true
-                holds = mnemonic in ELSE or decided(statement) is not False
+                holds = (
+                    mnemonic in ELSE or decided(statement, self.symbols) is not False
+                )
                 item[1] = not item[0] and holds
                 item[0] = item[0] or item[1]
         elif mnemonic in END_IF:
@@ -276,7 +284,7 @@ def _link(
         if kind == "jump" and key(target) in graph.labels:
             follow(graph.labels[key(target)])
             return
-        if kind == "jump" and is_local(target):
+        if kind == "jump" and is_local(target) and not target.startswith(UNSCOPED):
             message = f"cannot find the label {target} that {title} branches to"
             node.errors.append(("F002", message))
             return
@@ -335,4 +343,8 @@ def _link(
         transfer("jump")
     elif mnemonic == "movem" and not any(map(parse_list, operands)):
         node.errors.append(("S004", f"cannot tell which registers {text} uses"))
-    follow(node.index + 1)
+    after = node.index + 1
+    if "inline" in node.annotations:  # the code called returns after its data
+        while after < len(graph.nodes) and graph.nodes[after].is_data:
+            after += 1
+    follow(after)

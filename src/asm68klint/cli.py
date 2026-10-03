@@ -76,6 +76,22 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "-D",
+        "--define",
+        action="append",
+        default=[],
+        metavar="NAME[=VALUE]",
+        help="a name that is defined: conditional assembly that tests it goes one way",
+    )
+    parser.add_argument(
+        "-U",
+        "--undefine",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a name that is not defined",
+    )
+    parser.add_argument(
         "--cpu",
         choices=CPUS,
         help=(
@@ -137,6 +153,8 @@ def gather(options: argparse.Namespace) -> dict:
     for name in ("platform", "syntax", "extern", "cpu"):
         if getattr(options, name) is not None:
             settings[name] = getattr(options, name)
+    for name in ("define", "undefine"):
+        settings[name] = [*settings.get(name, []), *getattr(options, name)]
     settings["infer"] = options.infer or settings.get("infer", False)
     settings["fpu"] = options.fpu or settings.get("fpu", False)
     settings["include_dirs"] = [*options.include_dir, *settings.get("include_dirs", [])]

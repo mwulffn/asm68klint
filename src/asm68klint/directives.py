@@ -1,6 +1,7 @@
 """Assembler directives the linter needs to recognise (vasm, Motorola syntax)."""
 
 import re
+from collections.abc import Mapping
 
 from asm68klint.source import Statement, is_local, words
 
@@ -52,6 +53,16 @@ GAS_SILENT = words(
 
 
 OTHER |= GAS_SILENT | {"irp", "irpc"}
+# Directives of asm68k and SNASM68K.
+OTHER |= words(
+    "equs inform obj objend pusho popo module modend local while endw do until"
+    " group shift purge align rsset pushs pops unit disable enable case nocase"
+)
+# Directives that say which processor the program is for.
+OTHER |= words(
+    "mc68000 mc68010 mc68020 mc68030 mc68040 mc68060 mc68881 mc68882 mc68851"
+    " cpu32 fpu mmu"
+)
 
 
 NOPS = ("$4e71", "0x4e71")
@@ -73,6 +84,7 @@ def is_ignored(statement: Statement) -> bool:
     return statement.mnemonic in OTHER
 
 
+_NAME = re.compile(r"[A-Za-z_]\w*")
 _NUMBERS = re.compile(r"[\d\s()+*/-]+")
 _COMPARE = {
     "if": lambda value: value != 0,
@@ -86,20 +98,29 @@ _COMPARE = {
 }
 
 
-def decided(statement: Statement) -> bool | None:
-    """Return the outcome of a conditional that the text alone decides.
+def decided(
+    statement: Statement, symbols: Mapping[str, str | None] | None = None
+) -> bool | None:
+    """Return the outcome of a conditional that can be decided here.
 
     That is one comparing two texts (``ifc``, ``ifnc``), testing for an empty
-    one (``ifb``, ``ifnb``) or testing a sum of plain numbers. They come from
-    macros, where an argument has been filled in. None for any other.
+    one (``ifb``, ``ifnb``) or testing a sum of plain numbers: they come from
+    macros, where an argument has been filled in. And one that tests
+    ``symbols``, the names the user has given a value or said are not defined
+    (None). None for any other conditional.
     """
     mnemonic, operands = statement.mnemonic, statement.operands
+    symbols = symbols or {}
+    if mnemonic in ("ifd", "ifnd") and "".join(operands) in symbols:
+        return (symbols["".join(operands)] is not None) == (mnemonic == "ifd")
     if mnemonic in ("ifc", "ifnc") and len(operands) == 2:
         first, second = (operand.strip("\"'") for operand in operands)
         return (first == second) == (mnemonic == "ifc")
     if mnemonic in ("ifb", "ifnb"):
         return (not "".join(operands).strip("\"'")) == (mnemonic == "ifb")
-    text = ",".join(operands)
+    text = _NAME.sub(
+        lambda name: str(symbols.get(name.group()) or name.group()), ",".join(operands)
+    )
     if mnemonic in _COMPARE and _NUMBERS.fullmatch(text) and "**" not in text:
         try:
             value = eval(text.replace("/", "//"), {"__builtins__": {}})

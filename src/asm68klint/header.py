@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from asm68klint.findings import Finding
 from asm68klint.registers import LIST_PATTERN, parse_list
-from asm68klint.source import Statement
+from asm68klint.source import UNSCOPED, Statement
 
 FIELDS = ("In", "Out", "Clobbers")
 _FIELD = re.compile(r"\s*(In|Out|Clobbers)\s*:(.*)", re.IGNORECASE)
@@ -42,7 +42,9 @@ class Header:
     @property
     def title(self) -> str:
         """The routine name for use in messages."""
-        return self.name or "?"
+        name = self.name or "?"
+        # A label of the GNU assembler's is kept with a dot more than it has.
+        return name[1:] if name.startswith(UNSCOPED) else name
 
     def registers(self, *names: str) -> set[str]:
         """Return the registers named in the given fields."""
