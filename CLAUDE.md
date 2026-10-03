@@ -45,6 +45,8 @@ Features are judged by that use first (the user, 2026-10-03: "the value
 | `flow.py` | forward over the graph: which registers are changed, what is on the stack |
 | `reads.py` | forward: registers read while they hold nothing; backward: which are still needed (free registers) |
 | `linter.py` | the checks, inference in rounds (`settle`), effects, free registers |
+| `values.py`, `style.py` | the values of names (`equ`, `rs` fields) for the default build; the style rules (`T`, off unless selected) |
+| `format.py` | the formatter: blanks and case only, each line read again before it is kept |
 | `platforms.py`, `options.py`, `config.py`, `rules.py`, `fix.py`, `cli.py` | what their names say |
 
 ## Rules of the house
@@ -54,7 +56,14 @@ Features are judged by that use first (the user, 2026-10-03: "the value
 - Whatever the linter cannot follow is an error, never a guess. A
   heuristic is fine when it is about how source is *written* (an
   instruction in the first column) and not about what code *does*.
-- New read rules start as warnings.
+- New read rules start as warnings. Style rules are off by default.
+- The formatter is proved by assembling before and after and comparing
+  the bytes (a test does it with vasm on a messy sample; ProTracker's
+  26,737 lines and the Galaga port were done by hand, 2026-10-03). Do
+  that again after changing it.
+- The odd-field rule (T002) was compared with the Galaga port's own
+  checker, which asks vasm: with a field moved to an odd offset both name
+  the same 52 fields.
 - No runtime dependencies. Python by `uv`; `uv run pytest`,
   `uv run ruff format .`, `uv run ruff check .`.
 - The Galaga port's sources are the regression check for headers: 26
@@ -91,11 +100,11 @@ routines whose callees changed.
 
 ## Not done yet
 
-- Style rules: `clr` on a write-only hardware register, word fields at
-  odd offsets, displacements out of range, missing sizes, unused
-  `xdef`/`xref`. They want a rule group that is off by default.
-- A formatter (columns, case), checked by assembling before and after
-  and comparing the binaries.
+- More style rules, if wanted: a global label that could be local,
+  banner dividers, operating system calls outside one file, data in the
+  wrong kind of section.
+- The formatter does not touch source for the GNU assembler, and has one
+  layout (the Galaga port's) with one setting, the comment column.
 - What code called inside a routine reads is not checked against `In`.
 - Branches to `*+N` other than the conditional return (`beq.s *+4` over a
   one-word instruction): they need the length of instructions.

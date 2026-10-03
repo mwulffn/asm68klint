@@ -19,6 +19,7 @@ uv run asm68klint src/*.s                       # check headers against code
 uv run asm68klint --infer --effects src/*.s     # what does each routine do?
 uv run asm68klint --free src/player.s:412 src/*.s   # what may new code use here?
 uv run asm68klint --infer --fix src/*.s         # write the headers
+uv run asm68klint --format src/*.s include/*.i  # lay the source out in columns
 ```
 
 What it reads:
@@ -247,6 +248,78 @@ everything it changes under `Clobbers`, for a person to move the results to
 
 `--json` prints findings, effects or free registers as JSON.
 
+## Style rules
+
+The `T` rules are about how the source is written. They are off unless
+selected: `--extend-select T` adds them to the usual rules, `--select T`
+runs them alone.
+
+- **T001** An instruction reads a hardware register that can only be
+  written. With `--amiga`: the custom chips' registers by Commodore's
+  names (`bltcon0(a6)`, `_custom+dmacon`) or by address (`$dff096`).
+  `clr` is the one that is easy to miss: on a 68000 it reads before it
+  writes, and reading such a register puts whatever is on the bus in it.
+  Write `move.w #0,bltcon1(a6)`. (Not reported for `clr` with `--cpu`
+  68010 or later, where it does not read.)
+- **T002** A word or long field laid out with `rs` is at an odd offset:
+  `rs.w` after an odd number of `rs.b`. vasm does not align it, and a
+  68000 traps on the access.
+- **T003** An instruction that takes a size has none: `move d0,d1`.
+  (`moveq`, `lea`, `Scc`, the bit operations, multiplication and division
+  need none.)
+- **T004** A branch has a size (`bne.s`): the assembler picks the
+  shortest.
+- **T005** A displacement with an index register, `Name(a5,d0.w)`, is
+  outside -128 to 127. (Not with `--cpu` 68020 or later.)
+- **T006** A name is imported with `xref` and not used.
+- **T007** A name is exported with `xdef` and no other file given uses
+  it.
+
+T002 and T005 need the values of names. Those are worked out from the
+source's own `equ`, `=`, `set` and `rs`, for the build that is told
+nothing on the assembler's command line but what the linter is given
+with `-D` and `-U`: `ifnd SIZE` / `SIZE equ 4` / `endc` gives SIZE the
+value 4 unless `-D SIZE=8` says otherwise. A value that depends on
+anything else (a conditional that cannot be decided, a name from
+outside) is not known, and nothing is reported from it.
+
+## The formatter
+
+```
+uv run asm68klint --format FILE...            # rewrite the files
+uv run asm68klint --format --check FILE...    # exit 1 if any would change
+uv run asm68klint --format --diff FILE...     # show the changes
+```
+
+lays source in Motorola syntax out in columns:
+
+```
+Label:	move.w	d0,d1				; comment
+NAME		equ	4
+field		rs.w	1
+```
+
+- The label in the first column; a tab; the instruction; a tab; the
+  operands. `equ`, `=` and `rs` go in column 16, so that names and values
+  line up.
+- Comments start in column 48 (`--comment-column N`, or `comment-column`
+  in the configuration file). Lines that follow each other have their
+  comments in one column: further right if one of them needs it, up to
+  two tab stops; a line longer still has its comment after one tab. The
+  comment of a label that stands alone stays next to it.
+- Mnemonics, directives and register names are written in lower case.
+  Macro names, labels and everything else in the operands are not
+  touched.
+- Blank lines, comment lines and what is between `rem` and `erem` stay as
+  they are, less blanks at the end.
+
+Only blanks and case are changed. Each line is read again after it is
+laid out, and kept as it was unless label, instruction, operands and
+comment are the same as before. Tried by assembling before and after:
+ProTracker's source (26,737 lines, of which 21,814 changed) and the
+Galaga port's give the same bytes. Source for the GNU assembler is passed
+over.
+
 ## Running it
 
 ```
@@ -263,6 +336,8 @@ directives and should not be listed.
 | `-I DIR` | Adds a directory to search for include files. A file is also looked for next to the file that includes it, next to the file given on the command line, in the current directory, and in directories named by `incdir`. Names are matched whatever their case. |
 | `--reserved a4,a5` | The reserved registers; `-` means none. Default `a5,a6`. |
 | `--select H,R001`, `--ignore R002` | The rules to report, by code or by the beginning of one. |
+| `--extend-select T` | Rules to report as well as the usual ones: the style rules. |
+| `--format`, `--check`, `--diff`, `--comment-column N` | See The formatter. |
 | `--infer` | Code need not have headers. |
 | `--effects`, `--free FILE:LINE`, `--fix`, `--json` | See Code without headers. |
 | `--platform amiga`, `--amiga`, `--atari` | See Platforms. |
@@ -293,7 +368,9 @@ current directory or above it is read; `--config FILE` names another.
 reserved = ["a5", "a6"]
 include-dirs = ["include", "build"]
 select = ["H", "R"]
+extend-select = ["T"]
 ignore = ["R002"]
+comment-column = 48
 define = ["DEBUG=0"]
 undefine = ["PROFILE"]
 infer = false
@@ -339,6 +416,13 @@ replaces the file's setting (`-` for an empty list), except `-I`, `-D` and
 | S004 | register-list | a `movem` whose register list cannot be read |
 | S005 | annotation | a lint annotation that is wrong or misplaced |
 | S006 | processor | an instruction the chosen processor does not have |
+| T001 | write-only-read | a hardware register that can only be written is read (off) |
+| T002 | odd-field | a word or long field at an odd offset (off) |
+| T003 | missing-size | an instruction without a size (warning, off) |
+| T004 | sized-branch | a branch with a size (warning, off) |
+| T005 | index-displacement | `d8(an,xn)` with a displacement out of range (off) |
+| T006 | unused-xref | a name imported and not used (warning, off) |
+| T007 | unused-xdef | a name exported that no other file uses (warning, off) |
 
 Ignoring an F or S rule hides the message, not the gap: what the linter
 could not follow is still not checked.
@@ -496,8 +580,9 @@ Things that are not noticed:
 Other notes:
 
 - In Motorola syntax the operand field ends at the first blank, as in
-  vasm without `-spaces`; only a blank straight after a comma is
-  tolerated. In the GNU assembler's it is the rest of the line.
+  vasm without `-spaces`; a blank straight after a comma is tolerated
+  (vasm itself does not take it). In the GNU assembler's it is the rest
+  of the line.
 
 ## Development
 
