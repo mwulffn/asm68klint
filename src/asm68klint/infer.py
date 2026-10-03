@@ -15,7 +15,7 @@ from asm68klint.source import UNSCOPED, Statement, is_local, label_key
 
 CALLS = {"bsr", "jsr"}
 JUMPS = {"bra", "jmp"} | BRANCHES | LOOPS
-NO_FALL_THROUGH = {"bra", "jmp", "rts", "rte", "rtr"}
+NO_FALL_THROUGH = {"bra", "jmp", "rts", "rte", "rtr", "rtd"}
 EXPORTS = ("xdef", "public", "global")
 
 

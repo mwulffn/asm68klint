@@ -140,10 +140,10 @@ SETUP	macro
 
 
 def test_unknown_mnemonic_is_an_error(lint):
-    source = routine("", "\tFROB\td0\n\tbfextu\td0{1:2},d1\n\trts\n")
+    source = routine("", "\tFROB\td0\n\tmvz.w\td0,d1\n\trts\n")
     assert lint(source) == [
         "main.s:8: error: unknown instruction, directive or macro 'FROB'",
-        "main.s:9: error: unknown instruction, directive or macro 'bfextu'",
+        "main.s:9: error: unknown instruction, directive or macro 'mvz'",
     ]
 
 

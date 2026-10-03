@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from asm68klint.flow import Effect
+from asm68klint.m68k import CPUS
 from asm68klint.platforms import PLATFORMS, Platform
 from asm68klint.registers import canonical, parse_list
 from asm68klint.rules import chosen
@@ -24,6 +25,8 @@ class Options:
     platform: Platform | None
     syntax: str
     extern: Effect | None
+    cpu: str | None
+    fpu: bool
 
 
 def make_options(
@@ -35,6 +38,8 @@ def make_options(
     platform: str | None = None,
     syntax: str = "auto",
     extern: str | None = None,
+    cpu: str | None = None,
+    fpu: bool = False,
 ) -> Options:
     """Check the settings of a lint run and put them together.
 
@@ -47,7 +52,10 @@ def make_options(
     ``syntax`` is the assembler's: ``motorola``, ``gas``, or ``auto`` to decide
     for each file. ``extern`` is a register list: what a routine that is in
     none of the files may change (the C compiler's ``d0-d1/a0-a1``); without
-    it a call of such a routine is an error.
+    it a call of such a routine is an error. ``cpu`` is the processor the
+    program is for (``68000`` to ``68060``): an instruction it has not is an
+    error, and so is one of the floating point unit unless ``fpu`` says there
+    is one. Without ``cpu`` every instruction of the family is taken.
 
     Raises ValueError for a setting that makes no sense.
     """
@@ -59,6 +67,8 @@ def make_options(
         raise ValueError(f"{platform!r} is not a platform: {', '.join(PLATFORMS)}")
     if syntax not in SYNTAXES:
         raise ValueError(f"{syntax!r} is not a syntax: {', '.join(SYNTAXES)}")
+    if cpu not in (None, *CPUS):
+        raise ValueError(f"{cpu!r} is not a processor: {', '.join(CPUS)}")
     changed = None if extern in (None, "-") else parse_list(extern or "")
     if extern not in (None, "-") and changed is None:
         raise ValueError(f"{extern!r} is not a register list")
@@ -70,4 +80,6 @@ def make_options(
         PLATFORMS[platform] if platform else None,
         syntax,
         None if extern is None else Effect(frozenset(changed or ())),
+        cpu,
+        fpu,
     )

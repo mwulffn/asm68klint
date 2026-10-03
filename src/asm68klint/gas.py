@@ -29,7 +29,8 @@ _SIGNS = (
 )
 _LABEL = re.compile(r"\s*([A-Za-z_.$][\w.$]*|\d+)\s*:(?!:)")
 _REGISTER = re.compile(
-    r"%(d[0-7]|a[0-7]|sp|pc|fp|sr|ccr|usp|za\d|zd\d)\b", re.IGNORECASE
+    r"%(d[0-7]|a[0-7]|fp[0-7]|sp|pc|fp|sr|ccr|usp|za\d|zd\d|fpcr|fpsr|fpiar|vbr|sfc|dfc|cacr|caar|msp|isp)\b",
+    re.IGNORECASE,
 )
 _NUMBERED_USE = re.compile(r"(?<![\w.$])(\d+)([bf])(?![\w$])")
 _ASSIGNMENT = re.compile(r"\s*([A-Za-z_.$][\w.$]*)\s*=(?!=)(.*)")

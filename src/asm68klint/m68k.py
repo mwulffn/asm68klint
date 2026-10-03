@@ -1,14 +1,44 @@
-"""What 68000 instructions do to registers."""
+"""What the instructions of the 68000 family do to registers.
+
+The instructions are those of the 68000, 68010, 68020, 68030, 68040 and 68060
+and of the floating point unit (the 68881 and 68882, and the one built into
+the 68040 and 68060). Everything that depends on the processor is here and in
+``registers.py``.
+"""
 
 import re
 
 from asm68klint.registers import REGISTER_PATTERN, STACK, canonical, parse_list
 from asm68klint.source import Statement, words
 
+CPUS = ("68000", "68010", "68020", "68030", "68040", "68060")
+
 CONDITIONS = words("hi ls cc hs cs lo ne eq vc vs pl mi ge lt gt le")
+FLOAT_CONDITIONS = words(
+    "f eq ogt oge olt ole ogl or un ueq ugt uge ult ule ne t"
+    " sf seq gt ge lt le gl gle ngle ngl nle nlt nge ngt sne st"
+)
 BRANCHES = {f"b{condition}" for condition in CONDITIONS}
+BRANCHES |= {f"fb{condition}" for condition in FLOAT_CONDITIONS}
 SET_ON_CONDITION = {f"s{condition}" for condition in CONDITIONS | {"t", "f"}}
+SET_ON_CONDITION |= {f"fs{condition}" for condition in FLOAT_CONDITIONS}
 LOOPS = {f"db{condition}" for condition in CONDITIONS | {"t", "f"}} | {"dbra"}
+LOOPS |= {f"fdb{condition}" for condition in FLOAT_CONDITIONS}
+TRAPS = {f"trap{condition}" for condition in CONDITIONS | {"t", "f"}}
+TRAPS |= {f"ftrap{condition}" for condition in FLOAT_CONDITIONS}
+
+# Floating point instructions that put their result in their last operand.
+FLOAT_ARITHMETIC = words(
+    "fabs facos fadd fasin fatan fatanh fcos fcosh fdiv fetox fetoxm1 fgetexp"
+    " fgetman fint fintrz flog10 flog2 flogn flognp1 fmod fmove fmul fneg frem"
+    " fscale fsgldiv fsglmul fsin fsinh fsqrt fsub ftan ftanh ftentox ftwotox"
+    " fsadd fdadd fsmove fdmove fsmul fdmul fsdiv fddiv fssub fdsub fsabs fdabs"
+    " fsneg fdneg fssqrt fdsqrt fsincos fmovecr fmovem"
+)
+FLOAT = FLOAT_ARITHMETIC | words("fcmp ftst fnop fsave frestore")
+FLOAT |= {
+    name for name in BRANCHES | SET_ON_CONDITION | LOOPS | TRAPS if name[0] == "f"
+}
 
 # Instructions whose last operand is the destination.
 WRITES_LAST = words(
@@ -16,43 +46,106 @@ WRITES_LAST = words(
     " add adda addi addq addx sub suba subi subq subx"
     " and andi or ori eor eori mulu muls divu divs abcd sbcd"
     " asl asr lsl lsr rol ror roxl roxr bset bclr bchg"
+    " movec moves bfexts bfextu bfffo bfins divul divsl move16"
+    " pmove pmovefd"
 )
+WRITES_LAST |= FLOAT_ARITHMETIC
 # Instructions that write their only operand.
-WRITES_ONLY = words("clr neg negx not nbcd swap ext tas unlk")
+WRITES_ONLY = words("clr neg negx not nbcd swap ext extb tas unlk bfchg bfclr bfset")
 WRITES_ONLY |= SET_ON_CONDITION
 # Instructions that write their first operand.
-WRITES_FIRST = LOOPS | {"link"}
+WRITES_FIRST = LOOPS | words("link cas cas2")
+# Instructions that write their second operand of three.
+WRITES_SECOND = words("pack unpk")
 # Instructions that write both operands.
 WRITES_BOTH = {"exg"}
 # Instructions that change no register operand.
 WRITES_NONE = words(
     "tst cmp cmpa cmpi cmpm btst chk pea nop stop reset trap trapv illegal"
     " bra bsr jmp jsr rts rte rtr"
+    " rtd bkpt bftst chk2 cmp2 callm rtm"
+    " pflush pflusha pflushn pflushan pflushr pload ploadr ploadw ptest ptestr"
+    " ptestw cinvl cinvp cinva cpushl cpushp cpusha plpar plpaw lpstop"
+    " fcmp ftst fnop fsave frestore"
 )
-WRITES_NONE |= BRANCHES
+WRITES_NONE |= BRANCHES | TRAPS
 
 # Instructions that write their destination without using what was in it.
-OVERWRITES = words("move movea moveq lea clr movem") | SET_ON_CONDITION
+OVERWRITES = words("move movea moveq lea clr movem movec moves bfexts bfextu bfffo")
+OVERWRITES |= SET_ON_CONDITION | words("fmove fmovem fmovecr")
 # Instructions that clear a register when both operands are that register.
 CLEARS_ITSELF = words("sub suba eor")
 
+INSTRUCTIONS = (
+    WRITES_LAST | WRITES_ONLY | WRITES_FIRST | WRITES_SECOND | WRITES_BOTH | WRITES_NONE
+)
 # Instructions that take a size.
 SIZED = (
-    (WRITES_LAST | WRITES_ONLY | words("tst cmp cmpa cmpi cmpm chk"))
+    (WRITES_LAST | WRITES_ONLY | words("tst cmp cmpa cmpi cmpm chk fcmp ftst"))
     - words("lea moveq swap unlk nbcd tas abcd sbcd")
     - SET_ON_CONDITION
 )
 
-INSTRUCTIONS = WRITES_LAST | WRITES_ONLY | WRITES_FIRST | WRITES_BOTH | WRITES_NONE
+# The first processor that has each instruction the 68000 has not.
+SINCE = {
+    **dict.fromkeys(words("movec moves rtd bkpt"), "68010"),
+    **dict.fromkeys(
+        words(
+            "bfchg bfclr bfexts bfextu bfffo bfins bfset bftst callm rtm cas cas2"
+            " chk2 cmp2 extb pack unpk divul divsl"
+        )
+        | {name for name in TRAPS if name[0] != "f"},
+        "68020",
+    ),
+    **dict.fromkeys(
+        words("pmove pmovefd pflush pflusha pflushr pload ploadr ploadw ptest"),
+        "68030",
+    ),
+    **dict.fromkeys(
+        words("move16 cinvl cinvp cinva cpushl cpushp cpusha pflushn pflushan"),
+        "68040",
+    ),
+    **dict.fromkeys(words("plpar plpaw lpstop"), "68060"),
+}
+# In these the 68030's and the 68040's forms have the same name.
+SINCE.update(dict.fromkeys(words("ptestr ptestw"), "68030"))
+
+# How many bytes an operand of each size takes on the stack.
+WIDTHS = {"b": 2, "w": 2, "l": 4, "s": 4, "d": 8, "x": 12, "p": 12}
 
 _POSTINCREMENT = re.compile(r"\(\s*(\w+)\s*\)\+")
 _PREDECREMENT = re.compile(r"-\(\s*(\w+)\s*\)")
 _REGISTER = re.compile(rf"(?<![\w.$])({REGISTER_PATTERN})(?![\w$])", re.IGNORECASE)
+_BIT_FIELD = re.compile(r"\{[^}]*\}$")
 
 
 def is_instruction(mnemonic: str | None) -> bool:
-    """True when the mnemonic is a 68000 instruction."""
+    """True when the mnemonic is an instruction of the 68000 family."""
     return mnemonic in INSTRUCTIONS
+
+
+def needs(mnemonic: str | None, cpu: str, fpu: bool) -> str | None:
+    """Return what an instruction needs that the chosen processor has not.
+
+    ``fpu`` says there is a floating point unit; the 68040 and 68060 have one.
+    """
+    if mnemonic in FLOAT:
+        return None if fpu or cpu in ("68040", "68060") else "a floating point unit"
+    first = SINCE.get(mnemonic or "", "68000")
+    return None if CPUS.index(first) <= CPUS.index(cpu) else f"a {first}"
+
+
+def width(statement: Statement) -> int:
+    """Return the bytes an instruction's operand takes on the stack."""
+    default = "x" if statement.mnemonic in FLOAT else "w"
+    return WIDTHS.get(statement.size or default, 2)
+
+
+def saves_whole(statement: Statement) -> bool:
+    """True when an instruction moves all of a register, so that it can be saved."""
+    if statement.mnemonic in ("fmove", "fmovem"):
+        return statement.size in (None, "x")
+    return statement.size == "l"
 
 
 def stepped_register(operand: str) -> str | None:
@@ -70,6 +163,8 @@ def destinations(statement: Statement) -> tuple[str, ...]:
         return operands[-1:]
     if mnemonic in WRITES_FIRST:
         return operands[:1]
+    if mnemonic in WRITES_SECOND:
+        return operands[1:2]
     if mnemonic in WRITES_BOTH:
         return operands
     return ()
@@ -78,17 +173,20 @@ def destinations(statement: Statement) -> tuple[str, ...]:
 def written_registers(statement: Statement) -> set[str]:
     """Return the registers an instruction writes.
 
-    That is every data or address register it has as a destination, plus the
-    address registers stepped by ``(an)+`` and ``-(an)`` in any operand. Pushes
-    and pops through the stack pointer are not included.
+    That is every register it has as a destination, plus the address registers
+    stepped by ``(an)+`` and ``-(an)`` in any operand. A destination may be a
+    pair (``d2:d3``, of a long division) or have a bit field (``d1{4:8}``).
+    Pushes and pops through the stack pointer are not included.
     """
     written: set[str] = set()
+    lists = statement.mnemonic in ("movem", "fmovem")
     for operand in destinations(statement):
-        register = canonical(operand)
-        if register:
-            written.add(register)
-        elif statement.mnemonic == "movem":
-            written.update(parse_list(operand) or [])
+        for part in _BIT_FIELD.sub("", operand).split(":"):
+            register = canonical(part)
+            if register:
+                written.add(register)
+            elif lists:
+                written.update(parse_list(part) or [])
     for operand in statement.operands:
         register = stepped_register(operand)
         if register and register != STACK:
@@ -113,7 +211,7 @@ def read_registers(statement: Statement) -> set[str]:
         if names[position]:
             if not overwritten:
                 read.add(names[position])
-        elif mnemonic == "movem" and parse_list(operand) is not None:
+        elif mnemonic in ("movem", "fmovem") and parse_list(operand) is not None:
             if not overwritten:
                 read.update(parse_list(operand) or [])
         else:
@@ -130,6 +228,7 @@ def normalise(statement: Statement) -> Statement:
     mnemonic = statement.mnemonic
     if mnemonic and mnemonic not in INSTRUCTIONS and statement.size is None:
         stem, size = mnemonic[:-1], mnemonic[-1]
-        if size in "bwl" and stem in SIZED:
+        sizes = "bwlsdxp" if stem in FLOAT else "bwl"
+        if size in sizes and stem in SIZED:
             statement.mnemonic, statement.size = stem, size
     return statement

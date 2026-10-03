@@ -11,6 +11,7 @@ from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
 from asm68klint.header import FIELDS, Field
 from asm68klint.infer import find_starts
+from asm68klint.m68k import needs
 from asm68klint.options import Options, make_options
 from asm68klint.reader import read_source
 from asm68klint.reads import Reads, check_reads
@@ -323,6 +324,17 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
     return findings
 
 
+def check_processor(graph: Graph, cpu: str, fpu: bool) -> list[Finding]:
+    """Report the instructions that the chosen processor does not have."""
+    findings = []
+    for node in graph.nodes:
+        missing = node.kind == "code" and needs(node.statement.mnemonic, cpu, fpu)
+        if missing:
+            message = f"{node.statement.name} needs {missing}, and this is for a {cpu}"
+            findings.append(problem(node.statement, "S006", message))
+    return findings
+
+
 def graphs(
     units: list[Unit], options: Options, inferred: bool = False
 ) -> Iterator[tuple[Routine, Graph]]:
@@ -399,6 +411,8 @@ def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
             findings.update(check_orphans(unit.orphans))
     for routine, graph in graphs(units, options):
         findings.update(check_routine(routine, graph, reserved))
+        if options.cpu:
+            findings.update(check_processor(graph, options.cpu, options.fpu))
     return sorted(
         (finding for finding in findings if finding.code in options.codes),
         key=lambda finding: (

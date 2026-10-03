@@ -17,8 +17,8 @@ from pathlib import Path
 OWN_FILE = "asm68klint.toml"
 PROJECT_FILE = "pyproject.toml"
 KEYS = ("reserved", "include-dirs", "select", "ignore")
-SWITCHES = ("infer",)
-WORDS = ("platform", "syntax", "extern")
+SWITCHES = ("infer", "fpu")
+WORDS = ("platform", "syntax", "extern", "cpu")
 
 
 def read_config(path: Path) -> dict | None:

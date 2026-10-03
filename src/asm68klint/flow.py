@@ -11,7 +11,8 @@ preserved.
 import re
 from dataclasses import dataclass, field
 
-from asm68klint.m68k import destinations, written_registers
+from asm68klint.m68k import destinations, saves_whole, written_registers
+from asm68klint.m68k import width as operand_width
 from asm68klint.registers import STACK, canonical, parse_list
 from asm68klint.source import LABEL_PATTERN, Statement
 
@@ -24,7 +25,8 @@ Size = int | str
 Slot = tuple[Size, str | None]
 Stack = tuple[Slot, ...] | None  # None: the stack depth is unknown
 
-RETURNS = {"rts": "rts", "rtr": "rts", "rte": "rte"}
+RETURNS = {"rts": "rts", "rtr": "rts", "rtd": "rts", "rte": "rte"}
+MOVES = ("move", "movea", "fmove")
 _PUSH = re.compile(r"-\(\s*(sp|a7)\s*\)", re.IGNORECASE)
 _POP = re.compile(r"\(\s*(sp|a7)\s*\)\+", re.IGNORECASE)
 _VIA_STACK = re.compile(r"\((.*,)?\s*(sp|a7)\s*[,)]", re.IGNORECASE)
@@ -202,13 +204,13 @@ def step(state: State, node: Node) -> State:
 def _execute(statement: Statement, dirty: set[str], stack: Stack) -> tuple[set, Stack]:
     """Apply one instruction to the set of dirty registers and the stack."""
     mnemonic, operands = statement.mnemonic, statement.operands
-    long = statement.size == "l"
-    width = 4 if long else 2
+    long = saves_whole(statement)
+    width = operand_width(statement)
     source, target = (operands[0], operands[-1]) if operands else ("", "")
     saved = restored = None
-    if mnemonic in ("move", "movea") and STACK not in map(canonical, operands):
+    if mnemonic in MOVES and STACK not in map(canonical, operands):
         saved, restored = canonical(source), canonical(target)
-    if mnemonic == "movem":
+    if mnemonic in ("movem", "fmovem"):
         pushed = parse_list(source) if _PUSH.fullmatch(target) else None
         popped = parse_list(target) if _POP.fullmatch(source) else None
         for register in reversed(pushed or []):
@@ -225,9 +227,9 @@ def _execute(statement: Statement, dirty: set[str], stack: Stack) -> tuple[set, 
         if pushed is not None or popped is not None:
             return dirty, stack
     if saved and long and _PUSH.fullmatch(target):
-        stack = push(stack, 4, None if saved in dirty else saved)
+        stack = push(stack, width, None if saved in dirty else saved)
     elif restored and long and _POP.fullmatch(source):
-        stack, held = pop(stack, 4)
+        stack, held = pop(stack, width)
         dirty.add(restored)
         if held == restored:
             dirty.discard(restored)
@@ -238,11 +240,13 @@ def _execute(statement: Statement, dirty: set[str], stack: Stack) -> tuple[set, 
     else:
         if mnemonic == "pea":
             stack = push(stack, 4)
+        # The frame fsave writes has no one size: frestore takes it off again.
+        size = "the frame of fsave" if mnemonic in ("fsave", "frestore") else width
         for operand in operands:
             if _PUSH.fullmatch(operand):
-                stack = push(stack, width)
+                stack = push(stack, size)
             elif _POP.fullmatch(operand):
-                stack, _ = pop(stack, width)
+                stack, _ = pop(stack, size)
         written = written_registers(statement)
         if STACK in written:
             stack = _adjust(stack, mnemonic, operands)

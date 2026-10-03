@@ -161,7 +161,7 @@ def test_pushes_and_pops_are_not_register_writes():
         assert written_registers(statement) <= {"d0"}
 
 
-@pytest.mark.parametrize("mnemonic", ["section", "dc", "frobnicate", "bfextu", None])
+@pytest.mark.parametrize("mnemonic", ["section", "dc", "frobnicate", "mvz", None])
 def test_other_mnemonics_are_not_instructions(mnemonic):
     assert not is_instruction(mnemonic)
 

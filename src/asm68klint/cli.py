@@ -9,6 +9,7 @@ from pathlib import Path
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
 from asm68klint.linter import describe_files, lint_files
+from asm68klint.m68k import CPUS
 from asm68klint.options import DEFAULT_RESERVED, SYNTAXES
 from asm68klint.platforms import PLATFORMS
 from asm68klint.rules import RULES
@@ -75,6 +76,19 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--cpu",
+        choices=CPUS,
+        help=(
+            "the processor the program is for: an instruction it has not is an"
+            " error (default: any of the family)"
+        ),
+    )
+    parser.add_argument(
+        "--fpu",
+        action="store_true",
+        help="with --cpu: there is a floating point unit (a 68881 or 68882)",
+    )
+    parser.add_argument(
         "--extern",
         metavar="REGISTERS",
         help=(
@@ -120,10 +134,11 @@ def gather(options: argparse.Namespace) -> dict:
     for name in ("reserved", "select", "ignore"):
         if getattr(options, name) is not None:
             settings[name] = split(getattr(options, name))
-    for name in ("platform", "syntax", "extern"):
+    for name in ("platform", "syntax", "extern", "cpu"):
         if getattr(options, name) is not None:
             settings[name] = getattr(options, name)
     settings["infer"] = options.infer or settings.get("infer", False)
+    settings["fpu"] = options.fpu or settings.get("fpu", False)
     settings["include_dirs"] = [*options.include_dir, *settings.get("include_dirs", [])]
     return settings
 

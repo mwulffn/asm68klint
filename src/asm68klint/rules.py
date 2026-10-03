@@ -55,6 +55,7 @@ RULES = {
         Rule("S003", "macro", ERROR, "a macro that cannot be read or expanded"),
         Rule("S004", "register-list", ERROR, "a movem with an unreadable list"),
         Rule("S005", "annotation", ERROR, "a lint annotation that is wrong"),
+        Rule("S006", "processor", ERROR, "an instruction the chosen CPU has not"),
     )
 }
 
