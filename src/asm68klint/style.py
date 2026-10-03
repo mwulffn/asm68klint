@@ -40,6 +40,7 @@ _WRITE_ONLY = re.compile(
 # By address: $dff000 and up, less the registers that are read.
 _ADDRESS = re.compile(r"\$dff([0-9a-f]{3})\b", re.IGNORECASE)
 _READABLE = range(0x020)
+_OTHERS = ("07c", "088", "08a", "038", "03a", "03c", "03e")  # deniseid, strobes
 NO_VALUE_NEEDED = ("lea", "pea")
 
 
@@ -51,7 +52,8 @@ def write_only(operand: str) -> str | None:
         if _WRITE_ONLY.fullmatch(name.lstrip("_")):
             return name
     match = _ADDRESS.search(operand)
-    if match and int(match.group(1), 16) not in _READABLE and match.group(1) != "07c":
+    known = match and match.group(1).lower() not in _OTHERS
+    if match and known and int(match.group(1), 16) not in _READABLE:
         return match.group(0)
     return None
 

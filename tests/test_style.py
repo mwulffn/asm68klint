@@ -96,6 +96,9 @@ def test_write_only_names():
     assert write_only("vhposr(a6)") is None
     assert write_only("bltsizeof(a6)") is None
     assert write_only("#dmacon") is None
+    assert write_only("copjmp1(a6)") is None  # a strobe: reading it sets it off
+    assert write_only("$dff088") is None
+    assert write_only("$dff096") == "$dff096"
 
 
 def test_word_and_long_fields_at_odd_offsets(lint):

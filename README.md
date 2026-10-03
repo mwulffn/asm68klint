@@ -256,7 +256,7 @@ runs them alone.
 
 - **T001** An instruction reads a hardware register that can only be
   written. With `--amiga`: the custom chips' registers by Commodore's
-  names (`bltcon0(a6)`, `_custom+dmacon`) or by address (`$dff096`).
+  names (`bltcon0(a6)`, `_custom+dmacon`) or by address (`$dff096`). The strobes (`copjmp1`) are not among them: a read is how they are set off.
   `clr` is the one that is easy to miss: on a 68000 it reads before it
   writes, and reading such a register puts whatever is on the bus in it.
   Write `move.w #0,bltcon1(a6)`. (Not reported for `clr` with `--cpu`
