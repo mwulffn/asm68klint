@@ -18,6 +18,7 @@ from asm68klint.reads import Reads, check_reads
 from asm68klint.registers import STACK, format_list
 from asm68klint.routines import Routine, check_label, check_orphans, find_routines
 from asm68klint.source import Statement, is_local, problem
+from asm68klint.tables import find_tables
 
 # With more different conditions of conditional assembly than this in one
 # routine, their combinations are no longer checked one by one.
@@ -36,9 +37,11 @@ class Unit:
     orphans: list[Statement] = field(default_factory=list)
     labels: set[str] = field(default_factory=set)
     exports: set[str] = field(default_factory=set)
+    tables: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.routines, self.orphans = find_routines(self.statements, self.starts)
+        self.tables = find_tables(self.statements)
         for statement in self.statements:
             if statement.label:
                 self.labels.add(statement.label)
@@ -358,6 +361,7 @@ def graphs(
                         ),
                         options.platform,
                         options.symbols,
+                        unit.tables,
                     ),
                 )
 

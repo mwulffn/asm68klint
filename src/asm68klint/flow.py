@@ -36,7 +36,9 @@ _STACK_OFFSET = re.compile(
 )
 _IMMEDIATE = re.compile(rf"#{_AMOUNT}")
 _TARGET = re.compile(
-    rf"({LABEL_PATTERN})(?:\(pc\))?|\(({LABEL_PATTERN}),pc\)", re.IGNORECASE
+    rf"({LABEL_PATTERN})(?:\(pc\))?|\(({LABEL_PATTERN}),pc\)"
+    rf"|\(({LABEL_PATTERN})\)(?:\.[wl])?",
+    re.IGNORECASE,
 )
 _SIZE_SUFFIX = re.compile(r"(?<=.)\.[wlsb]$", re.IGNORECASE)
 
@@ -127,7 +129,10 @@ def direct_target(operand: str) -> str | None:
     match = _TARGET.fullmatch(operand)
     if not match or canonical(operand):
         return None
-    return _SIZE_SUFFIX.sub("", match.group(1) or match.group(2))
+    name = match.group(1) or match.group(2) or match.group(3)
+    if canonical(name):  # (a0): through a register
+        return None
+    return _SIZE_SUFFIX.sub("", name)
 
 
 def join(first: State | None, second: State) -> State:

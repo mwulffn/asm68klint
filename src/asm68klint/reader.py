@@ -195,8 +195,12 @@ class Reader:
             argument[1:-1] if argument[:1] == "<" else argument
             for argument in call.operands
         ]
-        named = dict(zip(macro.parameters, arguments, strict=False))
-        named.update(dict.fromkeys(macro.parameters[len(arguments) :], ""))
+        # An argument may have a value for when it is left out: name=value.
+        named = {}
+        for position, parameter in enumerate(macro.parameters):
+            name, _, default = parameter.partition("=")
+            given = arguments[position] if position < len(arguments) else ""
+            named[name.strip()] = given or default
         names = "|".join(sorted(map(re.escape, named), key=len, reverse=True))
         by_name = (
             re.compile(rf"\\(?:({names})(?![\w$])|\{{({names})\}})") if named else None

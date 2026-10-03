@@ -22,6 +22,7 @@ from asm68klint.platforms import Platform
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
 from asm68klint.source import UNSCOPED, Statement, is_local, label_key
+from asm68klint.tables import table_used
 
 # Looks up a routine by name: returns what a call of it does, or the reason it
 # cannot be found.
@@ -48,6 +49,7 @@ def build_graph(
     resolve: Resolver,
     platform: Platform | None = None,
     symbols: Mapping[str, str | None] | None = None,
+    tables: Mapping[str, list[str]] | None = None,
 ) -> Graph:
     """Turn the code of a routine into nodes linked by control flow.
 
@@ -60,7 +62,7 @@ def build_graph(
     collector.finish()
     graph = collector.graph
     for node in graph.nodes:
-        _link(node, graph, routine, following, resolve, platform)
+        _link(node, graph, routine, following, resolve, platform, tables or {})
     _settle_local_calls(graph)
     return graph
 
@@ -235,6 +237,7 @@ def _link(
     following: Routine | None,
     resolve: Resolver,
     platform: Platform | None,
+    tables: Mapping[str, list[str]],
 ) -> None:
     """Work out where execution goes after a node and what a call there changes."""
     title = routine.header.title
@@ -299,6 +302,8 @@ def _link(
     def transfer(kind: str) -> None:
         """Handle a call or jump, using the annotations where they are needed."""
         known = platform.call(node.statement) if platform else None
+        through = table_used(operands[-1]) if operands and not name else None
+        table = tables.get(key(through)) if through else None
         if name and kind == "jump" and key(name) in graph.labels:
             go_to(name, kind)
         elif name and is_local(name) and key(name) in graph.labels:
@@ -311,6 +316,20 @@ def _link(
             go_to(name, kind)
         elif targets:
             for target in targets.labels:
+                go_to(target, kind)
+        elif table:
+            # A row of branches in this routine is jumped into; a table of
+            # offsets leads straight to where its entries say.
+            row = graph.labels.get(key(through or ""), len(graph.nodes))
+            rows = []
+            while row < len(graph.nodes) and kind == "jump":
+                if graph.nodes[row].statement.mnemonic not in ("bra", "jmp"):
+                    break
+                rows.append(row)
+                row += 1
+            for index in rows:
+                follow(index)
+            for target in () if rows else table:
                 go_to(target, kind)
         elif known:
             leave(f"the system call {text}", known, kind)

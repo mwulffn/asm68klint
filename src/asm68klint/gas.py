@@ -240,7 +240,7 @@ def _set_mnemonic(statement: Statement, name: str) -> None:
         parts = " ".join(statement.operands).replace(",", " ").split()
         statement.mnemonic = "macro"
         statement.label = parts[0] if parts else ""
-        statement.operands = tuple(part.partition("=")[0] for part in parts[1:])
+        statement.operands = tuple(parts[1:])
     else:
         statement.mnemonic = RENAMED.get(stem, stem)
         statement.size = size or None

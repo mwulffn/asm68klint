@@ -363,3 +363,92 @@ def test_an_include_is_looked_for_next_to_the_file_given_too(tmp_path: Path):
     main = tmp_path / "prog" / "main.s"
     main.write_text('\tinclude\t"../lib/part.i"\n')
     assert lint_files([main]) == []
+
+
+def test_a_jump_through_a_table_of_offsets(lint):
+    body = """\
+	add.w	d0,d0
+	move.w	.Table(pc,d0.w),d0
+	jmp	.Table(pc,d0.w)
+.Table	dc.w	.One-.Table,.Two-.Table
+	dc.w	Other-.Table
+.One	moveq	#0,d1
+	rts
+.Two	moveq	#0,d2
+	rts
+"""
+    other = (
+        ";--\n; Other\n; In: -\n; Out: -\n; Clobbers: d3\nOther:\tmoveq\t#0,d3\n\trts\n"
+    )
+    source = (
+        ";--\n; Foo\n; In: d0 = which\n; Out: -\n; Clobbers: d0-d3\nFoo:\n"
+        + body
+        + other
+    )
+    assert lint(source) == []
+    assert lint(source.replace("d0-d3", "d0-d2")) == [
+        (
+            "main.s:9: error: d3 is clobbered by the jump to Other but not listed"
+            " under Out or Clobbers of Foo"
+        )
+    ]
+
+
+def test_a_jump_into_a_row_of_branches(lint):
+    body = """\
+	lsl.w	#2,d0
+	jmp	.Row(pc,d0.w)
+.Row	bra.w	.One
+	bra.w	.Two
+.One	moveq	#0,d1
+	rts
+.Two	moveq	#0,d2
+	rts
+"""
+    source = ";--\n; Foo\n; In: d0 = which\n; Out: -\n; Clobbers: d0-d2\nFoo:\n" + body
+    assert lint(source) == []
+
+
+def test_a_table_in_code_without_headers(tmp_path: Path):
+    text = """\
+Start:	move.w	Table(pc,d0.w),d0
+	jmp	Table(pc,d0.w)
+Table:	dc.w	First-Table,Second-Table
+First:	moveq	#0,d1
+	rts
+Second:	moveq	#0,d2
+	rts
+"""
+    assert effects(tmp_path, text) == [
+        "Start: In d0; changes d0-d2 (no header)",
+        "First: In -; changes d1 (no header)",
+        "Second: In -; changes d2 (no header)",
+    ]
+
+
+def test_a_call_written_with_its_size_outside_brackets(lint):
+    other = (
+        ";--\n; Other\n; In: -\n; Out: -\n; Clobbers: d3\nOther:\tmoveq\t#0,d3\n\trts\n"
+    )
+    body = "\tjsr\t(Other).l\n\tjmp\t(Other).w\n"
+    assert lint(routine(body, "d3") + other) == []
+
+
+def test_local_labels_of_asm68k(lint):
+    body = """\
+	moveq	#3,d0
+@loop:	subq.w	#1,d0
+	bne.s	@loop
+	rts
+"""
+    assert lint(routine(body, "d0")) == []
+
+
+def test_macro_arguments_with_names_and_defaults(lint):
+    macro = """\
+clear:	macro	register,value=#0
+	move.l	\\value,\\register
+	endm
+"""
+    body = "\tclear\td0\n\tclear\td1,#5\n\trts\n"
+    assert lint(macro + routine(body, "d0-d1")) == []
