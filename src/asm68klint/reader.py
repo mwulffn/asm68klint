@@ -8,8 +8,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-from asmlint.findings import ERROR, Finding
-from asmlint.source import Statement, parse_statement, problem, split_comment
+from asm68klint.findings import Finding
+from asm68klint.source import Statement, parse_statement, problem, split_comment
 
 MAX_DEPTH = 50
 _ESCAPE = re.compile(r"\\([@#0-9])")
@@ -64,7 +64,7 @@ class Reader:
             if parse_statement("", number, text).mnemonic == last:
                 return skipped
             skipped.append(text)
-        self.findings.append(problem(start, missing))
+        self.findings.append(problem(start, "S003", missing))
         return skipped
 
     def _add(self, statement: Statement, directory: Path, depth: int = 0) -> None:
@@ -97,7 +97,7 @@ class Reader:
                 self.read_file(candidate / name)
                 return
         self.findings.append(
-            problem(statement, f"cannot find the include file {name!r}")
+            problem(statement, "S001", f"cannot find the include file {name!r}")
         )
 
     def _expand(self, call: Statement, directory: Path, depth: int) -> None:
@@ -107,7 +107,7 @@ class Reader:
                 f"macro {call.name} is expanded more than {MAX_DEPTH} levels deep;"
                 " recursive macros are not supported"
             )
-            self.findings.append(Finding(call.file, call.line, ERROR, message))
+            self.findings.append(Finding(call.file, call.line, "S003", message))
             return
         self.expansions += 1
         unique = f"_{self.expansions:06d}"
@@ -138,7 +138,7 @@ class Reader:
             unknown = re.search(r"\\.", split_comment(line.text)[0])
             if unknown:
                 message = f"cannot expand '{unknown.group()}' in macro {call.name}"
-                self.findings.append(Finding(call.file, call.line, ERROR, message))
+                self.findings.append(Finding(call.file, call.line, "S003", message))
             self._add(line, directory, depth + 1)
 
 

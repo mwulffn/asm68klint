@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass, field
 
-from asmlint.annotations import parse_annotation
-from asmlint.findings import ERROR, Finding
-from asmlint.header import Header, is_header_start, parse_header
-from asmlint.m68k import is_instruction
-from asmlint.source import Statement, is_local
+from asm68klint.annotations import parse_annotation
+from asm68klint.findings import Finding
+from asm68klint.header import Header, is_header_start, parse_header
+from asm68klint.m68k import is_instruction
+from asm68klint.source import Statement, is_local
 
 
 @dataclass
@@ -64,7 +64,7 @@ def _read_header_annotations(routine: Routine, lines: list[Statement]) -> None:
                 f"the lint annotation {annotation.keyword!r} cannot be used in a header"
             )
             routine.problems.append(
-                Finding(statement.file, statement.line, ERROR, message)
+                Finding(statement.file, statement.line, "S005", message)
             )
 
 
@@ -79,10 +79,10 @@ def check_orphans(orphans: list[Statement]) -> list[Finding]:
             continue
         if label:
             message = f"{label.label} has code but no routine header"
-            findings.append(Finding(label.file, label.line, ERROR, message))
+            findings.append(Finding(label.file, label.line, "H001", message))
         else:
             message = "code outside a routine: no routine header"
-            findings.append(Finding(statement.file, statement.line, ERROR, message))
+            findings.append(Finding(statement.file, statement.line, "H001", message))
     return findings
 
 
@@ -99,8 +99,8 @@ def check_label(routine: Routine) -> list[Finding]:
                 f"header names {header.name} but the label that follows is"
                 f" {statement.label}"
             )
-            return [Finding(header.file, line, ERROR, message)]
+            return [Finding(header.file, line, "H006", message)]
         if statement.label or is_instruction(statement.mnemonic):
             break
     message = f"header of {header.title} is not followed by a label"
-    return [Finding(header.file, line, ERROR, message)]
+    return [Finding(header.file, line, "H006", message)]

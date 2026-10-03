@@ -8,9 +8,9 @@
 import re
 from dataclasses import dataclass
 
-from asmlint.findings import ERROR, Finding
-from asmlint.registers import parse_list
-from asmlint.source import Statement
+from asm68klint.findings import Finding
+from asm68klint.registers import parse_list
+from asm68klint.source import Statement
 
 KEYWORDS = ("clobbers", "targets", "allow")
 _ANNOTATION = re.compile(r"\blint:\s*(\S+)\s*(.*)", re.IGNORECASE)
@@ -45,4 +45,4 @@ def parse_annotation(statement: Statement) -> Annotation | Finding | None:
         return annotation
     else:
         message = f"cannot parse the lint annotation {keyword + ' ' + argument!r}"
-    return Finding(statement.file, statement.line, ERROR, message)
+    return Finding(statement.file, statement.line, "S005", message)

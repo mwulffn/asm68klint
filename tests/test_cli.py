@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from asmlint.cli import main
+from asm68klint.cli import main
 
 GOOD = """\
 ;--
@@ -48,14 +48,14 @@ def test_clean_file_exits_zero_and_prints_nothing(write, capsys):
 def test_errors_are_printed_one_per_line_and_exit_one(write, capsys):
     assert main([write("good.s", GOOD), write("bad.s", BAD)]) == 1
     assert capsys.readouterr().out == (
-        "bad.s:7: error: d0 is written but not listed under Out or Clobbers of Foo\n"
+        "bad.s:7: error: R001 d0 is written but not listed under Out or Clobbers of Foo\n"
     )
 
 
 def test_warnings_alone_exit_zero(write, capsys):
     assert main([write("stale.s", STALE)]) == 0
     assert capsys.readouterr().out == (
-        "stale.s:5: warning: d1 is listed under Clobbers of Foo but is never changed\n"
+        "stale.s:5: warning: R002 d1 is listed under Clobbers of Foo but is never changed\n"
     )
 
 
@@ -64,7 +64,7 @@ def test_reserved_option(write, capsys):
     assert main([name]) == 0
     assert main(["--reserved", "a4,sp", name]) == 1
     assert capsys.readouterr().out == (
-        "reserved.s:7: error: reserved register a4 is written in Foo\n"
+        "reserved.s:7: error: R003 reserved register a4 is written in Foo\n"
     )
     assert main(["--reserved", "a8", name]) == 2
     assert "a8 is not a register" in capsys.readouterr().err
@@ -83,7 +83,7 @@ def test_include_directory_option(write, capsys):
     assert main([name]) == 1
     assert "cannot find the include file" in capsys.readouterr().out
     assert main(["-I", "gen", name]) == 1
-    assert capsys.readouterr().out.startswith("gen/part.i:7: error: d0 is written")
+    assert capsys.readouterr().out.startswith("gen/part.i:7: error: R001 d0 is written")
 
 
 def test_missing_file_exits_two(write, capsys):
@@ -93,10 +93,60 @@ def test_missing_file_exits_two(write, capsys):
 
 def test_module_can_be_run(write):
     result = subprocess.run(
-        [sys.executable, "-m", "asmlint", write("bad.s", BAD)],
+        [sys.executable, "-m", "asm68klint", write("bad.s", BAD)],
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 1
     assert result.stdout.startswith("bad.s:7: error:")
+
+
+def test_ignore_and_select_choose_rules(write, capsys):
+    name = write("bad.s", BAD)
+    assert main(["--ignore", "R001", name]) == 0
+    assert main(["--select", "H", name]) == 0
+    assert main(["--select", "R", "--ignore", "R002", name]) == 1
+    assert capsys.readouterr().out.startswith("bad.s:7: error: R001")
+    assert main(["--select", "X9", name]) == 2
+    assert "'X9' matches no rule" in capsys.readouterr().err
+
+
+def test_rules_are_listed(capsys):
+    assert main(["--rules"]) == 0
+    assert "R001  error    undeclared-change" in capsys.readouterr().out
+
+
+def test_no_files_is_a_usage_error(write):
+    with pytest.raises(SystemExit):
+        main([])
+
+
+def test_configuration_file_is_found_above(write, capsys, monkeypatch):
+    write("asm68klint.toml", 'reserved = ["a4"]\ninclude-dirs = ["gen"]\n')
+    Path("gen").mkdir()
+    Path("src").mkdir()
+    write("gen/part.i", clearing("a4"))
+    write("src/main.s", '\tinclude\t"part.i"\n')
+    monkeypatch.chdir("src")
+    assert main(["main.s"]) == 1
+    assert "R003 reserved register a4 is written" in capsys.readouterr().out
+    assert main(["--reserved", "-", "main.s"]) == 0
+
+
+def test_pyproject_table_and_the_config_option(write, capsys):
+    write("pyproject.toml", '[tool.asm68klint]\nignore = ["R001"]\n')
+    name = write("bad.s", BAD)
+    assert main([name]) == 0
+    assert main(["--ignore", "-", name]) == 1
+    capsys.readouterr()
+    other = write("other.toml", "select = 7\n")
+    assert main(["--config", other, name]) == 2
+    assert "select must be a list of strings" in capsys.readouterr().err
+    assert main(["--config", write("typo.toml", "reservd = []\n"), name]) == 2
+    assert "unknown setting 'reservd'" in capsys.readouterr().err
+
+
+def test_pyproject_without_our_table_is_passed_over(write):
+    write("pyproject.toml", '[project]\nname = "x"\n')
+    assert main([write("bad.s", BAD)]) == 1

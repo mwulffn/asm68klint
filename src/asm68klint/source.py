@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 
-from asmlint.findings import ERROR, Finding
+from asm68klint.findings import Finding
 
 _LABEL_AT_START = re.compile(r"([^\s:=;]+)(::?)?")
 _LABEL_INDENTED = re.compile(r"\s+([^\s:=;]+)::?")
@@ -40,11 +40,11 @@ def words(text: str) -> set[str]:
     return set(text.split())
 
 
-def problem(statement: Statement, message: str, severity: str = ERROR) -> Finding:
+def problem(statement: Statement, code: str, message: str) -> Finding:
     """Return a finding located at a statement."""
     if statement.macro:
         message += f" (in macro {statement.macro})"
-    return Finding(statement.file, statement.line, severity, message)
+    return Finding(statement.file, statement.line, code, message)
 
 
 def is_local(label: str) -> bool:

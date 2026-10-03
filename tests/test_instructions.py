@@ -2,8 +2,8 @@
 
 import pytest
 
-from asmlint.m68k import INSTRUCTIONS, is_instruction, written_registers
-from asmlint.source import parse_statement
+from asm68klint.m68k import INSTRUCTIONS, is_instruction, written_registers
+from asm68klint.source import parse_statement
 
 CASES = [
     # moves

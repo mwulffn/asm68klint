@@ -2,8 +2,8 @@
 
 import re
 
-from asmlint.registers import STACK, canonical, parse_list
-from asmlint.source import Statement, words
+from asm68klint.registers import STACK, canonical, parse_list
+from asm68klint.source import Statement, words
 
 CONDITIONS = words("hi ls cc hs cs lo ne eq vc vs pl mi ge lt gt le")
 BRANCHES = {f"b{condition}" for condition in CONDITIONS}

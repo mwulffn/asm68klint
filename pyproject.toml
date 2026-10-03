@@ -1,7 +1,7 @@
 [project]
-name = "asmlint"
+name = "asm68klint"
 version = "0.1.0"
-description = "Lint 68000 assembly routine headers against what the code does to registers"
+description = "A linter for Motorola 68000 assembly: routine headers checked against what the code does to registers"
 readme = "README.md"
 authors = [
     { name = "Michael Wulff Nielsen", email = "mwulff@gmail.com" }
@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.scripts]
-asmlint = "asmlint.cli:main"
+asm68klint = "asm68klint.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.11,<0.13.0"]

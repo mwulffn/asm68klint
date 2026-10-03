@@ -11,9 +11,9 @@ preserved.
 import re
 from dataclasses import dataclass, field
 
-from asmlint.m68k import destinations, written_registers
-from asmlint.registers import STACK, canonical, parse_list
-from asmlint.source import Statement
+from asm68klint.m68k import destinations, written_registers
+from asm68klint.registers import STACK, canonical, parse_list
+from asm68klint.source import Statement
 
 # A stack slot is (size in bytes, what it holds). It holds either the entry
 # value of the named register, or None for anything else. A slot of size 0
@@ -90,7 +90,8 @@ class Node:
     annotations: dict = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
     falls_off: bool = False  # execution runs past the end of the file
-    errors: list[str] = field(default_factory=list)  # why it cannot be analysed
+    # Why it cannot be analysed: (rule code, message) pairs.
+    errors: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def is_data(self) -> bool:

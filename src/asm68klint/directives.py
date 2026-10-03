@@ -1,6 +1,6 @@
 """Assembler directives the linter needs to recognise (vasm, Motorola syntax)."""
 
-from asmlint.source import Statement, words
+from asm68klint.source import Statement, words
 
 # Directives that put data, not code, into the program.
 DATA = words("dc dcb ds dx blk dr db dw dl incbin")

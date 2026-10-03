@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from asmlint import lint_files
+from asm68klint import lint_files
 
 Lint = Callable[..., list[str]]
 
@@ -17,7 +17,8 @@ def lint(tmp_path: Path) -> Lint:
     The positional argument is the text of ``main.s``. Keyword arguments name
     further files (``other_s="..."`` becomes ``other.s``); files ending in ``.s``
     are linted, the rest (``.i``) are only there to be included. Options for
-    ``lint_files`` are passed in ``options``.
+    ``lint_files`` are passed in ``options``. The findings are given without
+    their rule codes: ``main.s:7: error: message``.
     """
 
     def run(main: str, options: dict | None = None, **others: str) -> list[str]:
@@ -33,6 +34,10 @@ def lint(tmp_path: Path) -> Lint:
                 paths.append(path)
         findings = lint_files(paths, **(options or {}))
         prefix = f"{tmp_path}/"
-        return [str(finding).removeprefix(prefix) for finding in findings]
+        return [
+            f"{finding.file.removeprefix(prefix)}:{finding.line}:"
+            f" {finding.severity}: {finding.message}"
+            for finding in findings
+        ]
 
     return run

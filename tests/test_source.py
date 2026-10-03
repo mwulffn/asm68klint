@@ -2,7 +2,7 @@
 
 import pytest
 
-from asmlint.source import parse_statement
+from asm68klint.source import parse_statement
 
 CASES = [
     # line, label, mnemonic, size, operands

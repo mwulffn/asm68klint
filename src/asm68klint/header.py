@@ -7,9 +7,9 @@ the fields ``In:``, ``Out:`` and ``Clobbers:``.
 import re
 from dataclasses import dataclass, field
 
-from asmlint.findings import ERROR, Finding
-from asmlint.registers import LIST_PATTERN, parse_list
-from asmlint.source import Statement
+from asm68klint.findings import Finding
+from asm68klint.registers import LIST_PATTERN, parse_list
+from asm68klint.source import Statement
 
 FIELDS = ("In", "Out", "Clobbers")
 _FIELD = re.compile(r"\s*(In|Out|Clobbers)\s*:(.*)", re.IGNORECASE)
@@ -98,19 +98,22 @@ def parse_header(lines: list[Statement]) -> Header:
 def _check_fields(header: Header) -> None:
     """Extract the registers of each field and note what is wrong with them."""
 
-    def problem(line: int, message: str) -> None:
-        header.problems.append(Finding(header.file, line, ERROR, message))
+    def problem(line: int, code: str, message: str) -> None:
+        header.problems.append(Finding(header.file, line, code, message))
 
     if not header.name:
-        problem(header.line, "header has no routine name")
+        problem(header.line, "H002", "header has no routine name")
     for name in FIELDS:
         if name not in header.fields:
-            problem(header.line, f"header of {header.title} has no {name} field")
+            problem(
+                header.line, "H003", f"header of {header.title} has no {name} field"
+            )
             continue
         parsed = header.fields[name]
         if not parsed.text:
             problem(
                 parsed.line,
+                "H004",
                 f"the {name} field of {header.title} is empty; write - for nothing",
             )
         elif parsed.text == "-":
@@ -122,6 +125,7 @@ def _check_fields(header: Header) -> None:
             if None in lists:
                 problem(
                     parsed.line,
+                    "H005",
                     f"cannot parse the Clobbers field of {header.title}:"
                     f" {parsed.text!r}",
                 )

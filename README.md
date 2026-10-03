@@ -1,4 +1,4 @@
-# asmlint
+# asm68klint
 
 A linter for Motorola 68000 assembly source in vasm's Motorola syntax. It
 compares the header comment of every routine with what the routine's code
@@ -135,7 +135,9 @@ the register must be restored or be listed under `Out` or `Clobbers`.
 ## Running it
 
 ```
-uv run asmlint [-I DIR]... [--reserved REGISTERS] FILE...
+uv run asm68klint [-I DIR]... [--reserved REGISTERS] [--select RULES]
+                  [--ignore RULES] [--config FILE] FILE...
+uv run asm68klint --rules
 ```
 
 - Give all the source files of the program in one run, so that calls
@@ -146,15 +148,65 @@ uv run asmlint [-I DIR]... [--reserved REGISTERS] FILE...
   and in directories named by `incdir`.
 - `--reserved a4,a5` sets the reserved registers; `--reserved -` means
   none. The default is `a5,a6`.
+- `--select H,R001` reports only those rules and `--ignore R002` leaves
+  rules out. A rule is named by its code or by the beginning of one: `R`
+  is every register rule. `--rules` lists them.
 
-Output is one line per finding, `file:line: severity: message`, sorted by
-file and line. A finding in code that comes from a macro is reported at
+Output is one line per finding, `file:line: severity: code message`,
+sorted by file and line. A finding in code that comes from a macro is reported at
 the line that uses the macro and names the macro. The exit status is 0
 when there are no errors (warnings do not count), 1 when there are errors
 and 2 when the linter could not run.
 
-From Python: `asmlint.lint_files(paths, reserved=..., include_dirs=...)`
-returns the list of findings.
+From Python: `asm68klint.lint_files(paths, reserved=..., include_dirs=...,
+select=..., ignore=...)` returns the list of findings.
+
+### Configuration file
+
+The same settings can be kept in `asm68klint.toml`, or in the
+`[tool.asm68klint]` table of a `pyproject.toml`. The nearest one in the
+current directory or above it is read; `--config FILE` names another.
+
+```
+reserved = ["a5", "a6"]
+include-dirs = ["include", "build"]
+select = ["H", "R"]
+ignore = ["R002"]
+```
+
+Directories are relative to the file. An option on the command line
+replaces the file's setting (`-` for an empty list), except `-I`, whose
+directories are searched before the file's.
+
+### Rules
+
+| Code | Name | Reports |
+| --- | --- | --- |
+| H001 | missing-header | code that no routine header covers |
+| H002 | header-name | a header without a routine name |
+| H003 | header-field | a header without one of its three fields |
+| H004 | header-empty-field | a field with nothing in it |
+| H005 | header-clobbers | a `Clobbers` field that is not a register list |
+| H006 | header-label | a header not followed by the label it names |
+| R001 | undeclared-change | a register changed and not under `Out` or `Clobbers` |
+| R002 | stale-header | a register declared and never changed (warning) |
+| R003 | reserved-write | a write to a reserved register |
+| R004 | interrupt-preserve | an interrupt handler that changes a register |
+| R005 | interrupt-clobbers | an interrupt handler whose `Clobbers` is not `-` |
+| R006 | unbalanced-stack | a stack that is not as it was found at a return |
+| F001 | unknown-call | a call or jump that cannot be followed |
+| F002 | missing-label | a branch to a label that is not there |
+| F003 | runs-into-data | execution runs into data |
+| F004 | runs-off-end | execution runs off the end of the file |
+| F005 | unreachable | code that nothing reaches (warning) |
+| S001 | include-not-found | an include file that is missing |
+| S002 | unknown-instruction | an unknown instruction, directive or macro |
+| S003 | macro | a macro that cannot be read or expanded |
+| S004 | register-list | a `movem` whose register list cannot be read |
+| S005 | annotation | a lint annotation that is wrong or misplaced |
+
+Ignoring an F or S rule hides the message, not the gap: what the linter
+could not follow is still not checked.
 
 Development:
 

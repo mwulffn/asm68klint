@@ -3,8 +3,8 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from asmlint.annotations import Annotation, parse_annotation
-from asmlint.directives import (
+from asm68klint.annotations import Annotation, parse_annotation
+from asm68klint.directives import (
     ELSE,
     ELSE_IF,
     END_IF,
@@ -13,12 +13,12 @@ from asmlint.directives import (
     is_data,
     is_ignored,
 )
-from asmlint.findings import Finding
-from asmlint.flow import RETURNS, Call, Node, direct_target
-from asmlint.m68k import BRANCHES, LOOPS, is_instruction
-from asmlint.registers import parse_list
-from asmlint.routines import Routine
-from asmlint.source import Statement, is_local
+from asm68klint.findings import Finding
+from asm68klint.flow import RETURNS, Call, Node, direct_target
+from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
+from asm68klint.registers import parse_list
+from asm68klint.routines import Routine
+from asm68klint.source import Statement, is_local
 
 # Looks up a routine by name: returns the registers it declares as changed, or
 # the reason it cannot be found.
@@ -89,7 +89,10 @@ class _Collector:
             self.pending = {}
             if not is_instruction(mnemonic):
                 node.errors.append(
-                    f"unknown instruction, directive or macro {statement.name!r}"
+                    (
+                        "S002",
+                        f"unknown instruction, directive or macro {statement.name!r}",
+                    )
                 )
 
     def finish(self) -> None:
@@ -194,13 +197,14 @@ def _link(
             follow(graph.labels[key(target)])
             return
         if kind == "jump" and is_local(target):
-            node.errors.append(
-                f"cannot find the label {target} that {title} branches to"
-            )
+            message = f"cannot find the label {target} that {title} branches to"
+            node.errors.append(("F002", message))
             return
         found = resolve(target)
         if isinstance(found, str):
-            node.errors.append(f"cannot analyse the {kind} to {target}: {found}")
+            node.errors.append(
+                ("F001", f"cannot analyse the {kind} to {target}: {found}")
+            )
         else:
             leave(f"the {kind} to {target}", found, kind)
 
@@ -218,7 +222,8 @@ def _link(
             for target in targets.labels:
                 go_to(target, kind)
         else:
-            node.errors.append(f"cannot analyse the indirect {kind} {text}; {ANNOTATE}")
+            message = f"cannot analyse the indirect {kind} {text}; {ANNOTATE}"
+            node.errors.append(("F001", message))
 
     node.exit = RETURNS.get(mnemonic)
     if node.exit or node.is_data:
@@ -237,9 +242,10 @@ def _link(
     elif mnemonic == "trap" and clobbers:
         leave(f"the {text}", clobbers.registers, "call")
     elif mnemonic == "trap":
-        node.errors.append(f"cannot analyse {text}; add a lint: clobbers annotation")
+        message = f"cannot analyse {text}; add a lint: clobbers annotation"
+        node.errors.append(("F001", message))
     elif mnemonic in BRANCHES or mnemonic in LOOPS:
         transfer("jump")
     elif mnemonic == "movem" and not any(map(parse_list, operands)):
-        node.errors.append(f"cannot tell which registers {text} uses")
+        node.errors.append(("S004", f"cannot tell which registers {text} uses"))
     follow(node.index + 1)

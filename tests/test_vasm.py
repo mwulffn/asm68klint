@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from asmlint.m68k import is_instruction
-from asmlint.reader import read_source
-from asmlint.source import Statement, parse_statement
+from asm68klint.m68k import is_instruction
+from asm68klint.reader import read_source
+from asm68klint.source import Statement, parse_statement
 
 VASM = shutil.which("vasmm68k_mot")
 

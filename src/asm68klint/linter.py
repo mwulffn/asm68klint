@@ -5,14 +5,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from asmlint.findings import ERROR, WARNING, Finding
-from asmlint.flow import Node, State, analyse, step
-from asmlint.graph import Graph, build_graph
-from asmlint.header import Field
-from asmlint.reader import read_source
-from asmlint.registers import STACK, canonical
-from asmlint.routines import Routine, check_label, check_orphans, find_routines
-from asmlint.source import Statement, is_local, problem
+from asm68klint.findings import Finding
+from asm68klint.flow import Node, State, analyse, step
+from asm68klint.graph import Graph, build_graph
+from asm68klint.header import Field
+from asm68klint.reader import read_source
+from asm68klint.registers import STACK, canonical
+from asm68klint.routines import Routine, check_label, check_orphans, find_routines
+from asm68klint.rules import chosen
+from asm68klint.source import Statement, is_local, problem
 
 DEFAULT_RESERVED = ("a5", "a6")
 # With more different conditions of conditional assembly than this in one
@@ -110,10 +111,10 @@ def check_unreachable(
         if index in graph.entries:
             where = graph.entries[index]
             message = f"{where.label} has code but no routine header"
-            findings.append(Finding(where.file, where.line, ERROR, message))
+            findings.append(Finding(where.file, where.line, "H001", message))
         elif was_reachable:
             message = f"unreachable code in {routine.header.title} is not checked"
-            findings.append(problem(where, message, WARNING))
+            findings.append(problem(where, "F005", message))
     return findings
 
 
@@ -141,7 +142,7 @@ def check_reserved(
                 f"reserved register {register} is {causes[register]}"
                 f" in {routine.header.title}"
             )
-            findings.append(problem(node.statement, message))
+            findings.append(problem(node.statement, "R003", message))
     return findings
 
 
@@ -204,8 +205,8 @@ def check_paths(
     title = header.title
     nodes = graph.nodes
 
-    def report(statement: Statement, message: str) -> None:
-        summary.findings.append(problem(statement, message))
+    def report(statement: Statement, code: str, message: str) -> None:
+        summary.findings.append(problem(statement, code, message))
 
     summary.findings += check_reserved(routine, graph, states, reserved)
     for node, before in zip(nodes, states, strict=True):
@@ -213,11 +214,11 @@ def check_paths(
             continue
         summary.reached.add(node.index)
         if node.is_data:
-            report(node.statement, f"execution runs into data in {title}")
-        for error in node.errors:
-            report(node.statement, error)
+            report(node.statement, "F003", f"execution runs into data in {title}")
+        for code, error in node.errors:
+            report(node.statement, code, error)
         if node.falls_off:
-            report(node.statement, f"execution runs off the end of {title}")
+            report(node.statement, "F004", f"execution runs off the end of {title}")
         if node.is_data or node.errors or node.falls_off:
             summary.analysed = False
 
@@ -231,7 +232,7 @@ def check_paths(
     for node in exits.unbalanced:
         if STACK not in declared or node.exit == "rte":
             message = f"the stack is not balanced when {title} returns here"
-            report(node.statement, message)
+            report(node.statement, "R006", message)
     for register in sorted(changed - declared - {STACK}):
         culprit = first_cause(nodes, exits.changed, register)
         subject = register
@@ -244,11 +245,11 @@ def check_paths(
         message = (
             f"{subject} is {cause} but not listed under Out or Clobbers of {title}"
         )
-        report(culprit.statement, message)
+        report(culprit.statement, "R001", message)
     for register in sorted(unpreserved - {STACK}):
         culprit = first_cause(nodes, exits.unpreserved, register)
         message = f"interrupt handler {title} must preserve {register}"
-        report(culprit.statement, message)
+        report(culprit.statement, "R004", message)
 
 
 def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Finding]:
@@ -263,13 +264,13 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
     findings += graph.problems + summary.findings
     findings += check_unreachable(routine, graph, summary.reached)
 
-    def report(where: Field, message: str, severity: str) -> None:
-        findings.append(Finding(header.file, where.line, severity, message))
+    def report(where: Field, code: str, message: str) -> None:
+        findings.append(Finding(header.file, where.line, code, message))
 
     clobbers = header.fields.get("Clobbers")
     if summary.is_interrupt and clobbers and clobbers.registers:
         message = f"the header of interrupt handler {title} must say Clobbers: -"
-        report(clobbers, message, ERROR)
+        report(clobbers, "R005", message)
     if not (summary.returns and summary.analysed):
         return findings  # nothing can be called stale
     for name in ("Out", "Clobbers"):
@@ -279,7 +280,7 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
             message = (
                 f"{register} is listed under {name} of {title} but is never changed"
             )
-            report(header.fields[name], message, WARNING)
+            report(header.fields[name], "R002", message)
     return findings
 
 
@@ -287,12 +288,17 @@ def lint_files(
     paths: Iterable[Path],
     reserved: Iterable[str] = DEFAULT_RESERVED,
     include_dirs: Iterable[Path] = (),
+    select: Iterable[str] = (),
+    ignore: Iterable[str] = (),
 ) -> list[Finding]:
     """Lint the given source files together and return the sorted findings.
 
     ``reserved`` names the registers that may not be written without a
     ``lint: allow`` annotation. ``include_dirs`` are searched for include files.
+    ``select`` and ``ignore`` choose the rules to report, by code or by the
+    beginning of one; nothing selected means all of them.
     """
+    codes = chosen(select, ignore)
     reserved = {canonical(name) or name for name in reserved}
     findings: set[Finding] = set()
     units = []
@@ -307,4 +313,12 @@ def lint_files(
                 routine, following, lambda name, unit=unit: resolve(name, unit, units)
             )
             findings.update(check_routine(routine, graph, reserved))
-    return sorted(findings)
+    return sorted(
+        (finding for finding in findings if finding.code in codes),
+        key=lambda finding: (
+            finding.file,
+            finding.line,
+            finding.severity,
+            finding.message,
+        ),
+    )
