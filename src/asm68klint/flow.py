@@ -101,7 +101,8 @@ class Node:
     successors: list[int] = field(default_factory=list)
     # How the routine ends here: "rts", "rte", or "tail" for a jump elsewhere.
     exit: str | None = None
-    # "code" for an instruction, "data" for a data directive, and for
+    # "code" for an instruction, "data" for a data directive, "end" for the end
+    # of a routine that has a label and nothing after it, and for
     # conditional assembly "fork" (if) and "skip" (else). A fork goes on to the
     # next node when its condition holds and to ``jumps`` when it does not; a
     # skip, at the end of a branch, goes to ``jumps``, past the endc.
@@ -112,6 +113,10 @@ class Node:
     scope: str = ""  # the global label that local labels here belong to
     annotations: dict = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
+    # True for code of another routine that this one jumps into, taken in to
+    # be followed from here; what is wrong in it is reported in its own.
+    borrowed: bool = False
+    limit: int = 0  # the node after the last of the routine this one is from
     # Calls of code in the same routine: the nodes they go to.
     local_calls: list[int] = field(default_factory=list)
     falls_off: bool = False  # execution runs past the end of the file

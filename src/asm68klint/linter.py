@@ -10,7 +10,7 @@ from asm68klint.findings import Finding
 from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
 from asm68klint.header import FIELDS, Field
-from asm68klint.infer import find_starts
+from asm68klint.infer import find_starts, place_label
 from asm68klint.m68k import needs
 from asm68klint.options import Options, make_options
 from asm68klint.reader import read_source
@@ -38,15 +38,29 @@ class Unit:
     labels: set[str] = field(default_factory=set)
     exports: set[str] = field(default_factory=set)
     tables: dict[str, list[str]] = field(default_factory=dict)
+    # The labels inside routines (not those they start at): where each is.
+    homes: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.routines, self.orphans = find_routines(self.statements, self.starts)
         self.tables = find_tables(self.statements)
+        for index, routine in enumerate(self.routines):
+            for statement in routine.body:
+                label = statement.label
+                if label and place_label(label) and label != routine.header.name:
+                    self.homes[label] = index
         for statement in self.statements:
             if statement.label:
                 self.labels.add(statement.label)
             if statement.mnemonic in ("xdef", "public", "global"):
                 self.exports.update(statement.operands)
+
+    def borrow(self, label: str) -> tuple[Routine, Routine | None] | None:
+        """Return the routine a label is inside, and the routine after it."""
+        if label not in self.homes:
+            return None
+        index = self.homes[label]
+        return self.routines[index], (self.routines[index + 1 :] or [None])[0]
 
 
 def resolve(
@@ -109,19 +123,26 @@ def configurations(nodes: list[Node]) -> list[dict[str, bool]]:
 
 
 def check_unreachable(
-    routine: Routine, graph: Graph, reached: set[int]
+    routine: Routine, graph: Graph, reached: set[int], lenient: bool
 ) -> list[Finding]:
-    """Report code that no path from the routine's entry reaches."""
+    """Report code that no path from the routine's entry reaches.
+
+    With ``lenient``, code need not have a header, and a global label that
+    nothing in the routine reaches is one that other routines jump to: its
+    code is followed from there.
+    """
     findings = []
     reachable = True
     for index, node in enumerate(graph.nodes):
         was_reachable = reachable
-        if node.kind in ("fork", "skip"):
+        if node.kind in ("fork", "skip", "end") or node.borrowed:
             continue
         reachable = index in reached or node.is_data
         if reachable:
             continue
         where = node.statement
+        if index in graph.entries and lenient:
+            continue
         if index in graph.entries:
             where = graph.entries[index]
             message = f"{where.label} has code but no routine header"
@@ -142,7 +163,7 @@ def check_reserved(
     """
     findings = []
     for node, before in zip(graph.nodes, states, strict=True):
-        if before is None or node.is_data:
+        if before is None or node.is_data or node.borrowed:
             continue
         allowed = set(routine.allowed)
         if "allow" in node.annotations:
@@ -230,14 +251,16 @@ def check_paths(
         if before is None:
             continue
         summary.reached.add(node.index)
+        if node.is_data or node.errors or node.falls_off:
+            summary.analysed = False
+        if node.borrowed:
+            continue  # reported in the routine the code is in
         if node.is_data:
             report(node.statement, "F003", f"execution runs into data in {title}")
         for code, error in node.errors:
             report(node.statement, code, error)
         if node.falls_off:
             report(node.statement, "F004", f"execution runs off the end of {title}")
-        if node.is_data or node.errors or node.falls_off:
-            summary.analysed = False
 
     exits = collect_exits(nodes, states)
     if inside:
@@ -297,7 +320,9 @@ def examine(
     return summary, reads
 
 
-def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Finding]:
+def check_routine(
+    routine: Routine, graph: Graph, reserved: set[str], lenient: bool = False
+) -> list[Finding]:
     """Compare what a routine does to registers with what its header declares."""
     header = routine.header
     title = header.title
@@ -308,7 +333,7 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
         + summary.findings
         + sorted(reads.findings, key=lambda finding: finding.line)
     )
-    findings += check_unreachable(routine, graph, summary.reached)
+    findings += check_unreachable(routine, graph, summary.reached, lenient)
 
     def report(where: Field, code: str, message: str) -> None:
         findings.append(Finding(header.file, where.line, code, message))
@@ -362,6 +387,7 @@ def graphs(
                         options.platform,
                         options.symbols,
                         unit.tables,
+                        unit.borrow if options.infer else None,
                     ),
                 )
 
@@ -421,7 +447,7 @@ def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
         if not options.infer:
             findings.update(check_orphans(unit.orphans))
     for routine, graph in graphs(units, options):
-        findings.update(check_routine(routine, graph, reserved))
+        findings.update(check_routine(routine, graph, reserved, options.infer))
         if options.cpu:
             findings.update(check_processor(graph, options.cpu, options.fpu))
     return sorted(

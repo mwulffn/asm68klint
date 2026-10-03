@@ -135,7 +135,6 @@ def test_a_program_is_checked_and_its_routines_found(lint, tmp_path: Path):
     assert [line.partition(": ")[2] for line in lines] == [
         "_double: In -; changes d0-d1 (no header)",
         "twice: In d0; changes d0-d1 (no header)",
-        ".Lout: In -; changes - (no header)",
         "keeper: In -; changes - (no header)",
     ]
 

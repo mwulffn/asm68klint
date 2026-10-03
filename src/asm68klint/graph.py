@@ -27,6 +27,9 @@ from asm68klint.tables import table_used
 # Looks up a routine by name: returns what a call of it does, or the reason it
 # cannot be found.
 Resolver = Callable[[str], Effect | str]
+# Looks up the routine that has a label inside it: returns that routine and
+# the one that follows it, or None.
+Borrow = Callable[[str], tuple[Routine, Routine | None] | None]
 ANNOTATE = "add a lint: clobbers or lint: targets annotation"
 
 
@@ -41,6 +44,9 @@ class Graph:
     problems: list[Finding] = field(default_factory=list)
     # The nodes that calls from inside the routine go to.
     local_entries: set[int] = field(default_factory=set)
+    # For the end of each routine whose code is here (see ``Node.limit``): the
+    # routine that follows it in the source.
+    after: dict[int, Routine | None] = field(default_factory=dict)
 
 
 def build_graph(
@@ -50,21 +56,45 @@ def build_graph(
     platform: Platform | None = None,
     symbols: Mapping[str, str | None] | None = None,
     tables: Mapping[str, list[str]] | None = None,
+    borrow: Borrow | None = None,
 ) -> Graph:
     """Turn the code of a routine into nodes linked by control flow.
 
     ``following`` is the routine that comes next in the source, which execution
-    falls into when it runs past the end of this one.
+    falls into when it runs past the end of this one. With ``borrow``, a jump
+    to a label inside another routine takes that routine's code in, so that it
+    is followed from here with the stack as it is at the jump: code that
+    several routines end in, say, which takes off the stack what each put on.
     """
     collector = _Collector(platform.silent if platform else frozenset(), symbols)
-    for statement in routine.body:
-        collector.add(statement)
-    collector.finish()
+    collector.take(routine, following)
     graph = collector.graph
+    taken = {id(routine)}
+    position = 0
+    while borrow and position < len(graph.nodes):
+        node = graph.nodes[position]
+        position += 1
+        name = _jumps_to(node)
+        if name and label_key(node.scope, name) not in graph.labels:
+            found = borrow(name)
+            if found and id(found[0]) not in taken:
+                taken.add(id(found[0]))
+                collector.take(*found, borrowed=True)
     for node in graph.nodes:
-        _link(node, graph, routine, following, resolve, platform, tables or {})
+        _link(node, graph, routine, resolve, platform, tables or {})
     _settle_local_calls(graph)
     return graph
+
+
+def _jumps_to(node: Node) -> str | None:
+    """Return the label an instruction jumps or branches to, if it names one."""
+    statement = node.statement
+    jumps = (
+        statement.mnemonic in ("bra", "jmp") or statement.mnemonic in BRANCHES | LOOPS
+    )
+    if node.kind != "code" or not jumps or not statement.operands:
+        return None
+    return direct_target(statement.operands[-1])
 
 
 def _settle_local_calls(graph: Graph) -> None:
@@ -118,6 +148,26 @@ class _Collector:
         # one that the text decides there is no fork: its branches are taken
         # or left out here, and it is [a branch was taken, this one is].
         self.conditionals: list[tuple[Node | None, list[Node]] | list[bool]] = []
+
+    def take(
+        self, routine: Routine, following: Routine | None, borrowed: bool = False
+    ) -> None:
+        """Take in the code of a routine."""
+        nodes = self.graph.nodes
+        start = len(nodes)
+        self.scope = ""
+        self.pending = {}
+        self.conditionals = []
+        for statement in routine.body:
+            self.add(statement)
+        self.finish()
+        if len(nodes) in self.graph.labels.values() and routine.body:
+            last = routine.body[-1]  # a label with nothing after it
+            self._node(Statement(last.file, last.line, ""), "end")
+        for node in nodes[start:]:
+            node.borrowed = borrowed
+            node.limit = len(nodes)
+        self.graph.after[len(nodes)] = following
 
     def add(self, statement: Statement) -> None:
         """Take in the next statement of the routine."""
@@ -234,7 +284,6 @@ def _link(
     node: Node,
     graph: Graph,
     routine: Routine,
-    following: Routine | None,
     resolve: Resolver,
     platform: Platform | None,
     tables: Mapping[str, list[str]],
@@ -249,7 +298,9 @@ def _link(
     targets = node.annotations.get("targets")
 
     def follow(index: int) -> None:
-        if index < len(graph.nodes):
+        """Go on to the node that comes next, or out of the end of the routine."""
+        following = graph.after.get(node.limit)
+        if index < node.limit:
             node.successors.append(index)
         elif following:
             via = f"falling through into {following.header.title}"
@@ -285,7 +336,7 @@ def _link(
     def go_to(target: str, kind: str) -> None:
         """Call or jump to a label: one in this routine or another routine."""
         if kind == "jump" and key(target) in graph.labels:
-            follow(graph.labels[key(target)])
+            node.successors.append(graph.labels[key(target)])
             return
         if kind == "jump" and is_local(target) and not target.startswith(UNSCOPED):
             message = f"cannot find the label {target} that {title} branches to"
@@ -327,8 +378,7 @@ def _link(
                     break
                 rows.append(row)
                 row += 1
-            for index in rows:
-                follow(index)
+            node.successors.extend(rows)
             for target in () if rows else table:
                 go_to(target, kind)
         elif known:

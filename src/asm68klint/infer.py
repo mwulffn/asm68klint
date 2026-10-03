@@ -1,10 +1,12 @@
 """Routines without headers: where they start.
 
 Code that has no headers is still made of routines. A global label starts one
-when it is called, exported, jumped to from another routine, or can only be
+when it is called, exported, jumped to from another file, or can only be
 reached in a way the source does not show (nothing falls into it and nothing
-in its routine branches to it: an entry of a jump table, an interrupt
-handler). Every other global label is a place inside the routine it is in.
+branches to it: an entry of a jump table, an interrupt handler). Every other
+global label is a place inside the routine it is in. Such a place may be
+jumped to from another routine: its code is then followed from there too
+(see ``build_graph``).
 """
 
 from asm68klint.directives import code_label, is_data
@@ -78,8 +80,8 @@ def find_starts(units: list[list[Statement]]) -> list[set[str]]:
 def _add_missed(statements: list[Statement], starts: set[str], code: set[str]) -> bool:
     """Add the labels that must start a routine as the routines now are.
 
-    Those are the labels jumped to from another routine of the file, and the
-    labels that nothing in their own routine reaches.
+    Those are the labels that nothing reaches: not their own routine, and no
+    jump from another.
     """
     routines, _ = find_routines(statements, starts)
     home: dict[str, int] = {}
@@ -87,19 +89,22 @@ def _add_missed(statements: list[Statement], starts: set[str], code: set[str]) -
         for statement in routine.body:
             if statement.label and place_label(statement.label):
                 home[statement.label] = index
-    found: set[str] = set()
+    # Labels that another routine jumps to: their code is followed from there.
+    foreign: set[str] = set()
     for index, routine in enumerate(routines):
         for statement in routine.body:
             name = target(statement)
             if name in home and home[name] != index:
-                found.add(name or "")
-        found |= _unreached(routine, code)
+                foreign.add(name or "")
+    found: set[str] = set()
+    for routine in routines:
+        found |= _unreached(routine, code, foreign)
     found = (found & code) - starts
     starts |= found
     return bool(found)
 
 
-def _unreached(routine: Routine, code: set[str]) -> set[str]:
+def _unreached(routine: Routine, code: set[str], foreign: set[str]) -> set[str]:
     """Return the global labels in a routine that must start routines of their own.
 
     Those are the labels its code does not get to: the first of them, then the
@@ -144,5 +149,6 @@ def _unreached(routine: Routine, code: set[str]) -> set[str]:
         missed = next((index for index in candidates if not reached[index]), None)
         if missed is None:
             return found
-        found.add(body[missed].label or "")
+        if body[missed].label not in foreign:
+            found.add(body[missed].label or "")
         pending.append(missed)

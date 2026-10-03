@@ -452,3 +452,42 @@ clear:	macro	register,value=#0
 """
     body = "\tclear\td0\n\tclear\td1,#5\n\trts\n"
     assert lint(macro + routine(body, "d0-d1")) == []
+
+
+def test_code_that_several_routines_end_in(lint, tmp_path):
+    text = """\
+First:	movem.l	d2-d3,-(sp)
+	moveq	#1,d2
+	bra	Done
+Second:	movem.l	d2-d3,-(sp)
+	moveq	#2,d3
+	tst.w	d0
+	beq	Done
+	moveq	#0,d1
+Done:	move.w	d2,d0
+	movem.l	(sp)+,d2-d3
+	rts
+Main:	bsr	First
+	bsr	Second
+	rts
+"""
+    assert lint(text, INFER) == []
+    assert effects(tmp_path, text) == [
+        "First: In -; changes d0 (no header)",
+        "Second: In d0/d2; changes d0-d1 (no header)",
+        "Main: In d2; changes d0-d1 (no header)",
+    ]
+
+
+def test_a_label_at_the_very_end_of_a_routine(lint):
+    text = """\
+First:	tst.w	d0
+	beq	Out
+	moveq	#0,d1
+Out:
+Second:	moveq	#0,d2
+	rts
+Main:	bsr	Second
+	bra	First
+"""
+    assert lint(text, INFER) == []
