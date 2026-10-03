@@ -14,15 +14,15 @@ from asm68klint.directives import (
     is_ignored,
 )
 from asm68klint.findings import Finding
-from asm68klint.flow import RETURNS, Call, Node, direct_target
+from asm68klint.flow import RETURNS, Call, Effect, Node, direct_target
 from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
 from asm68klint.source import Statement, is_local
 
-# Looks up a routine by name: returns the registers it declares as changed, or
-# the reason it cannot be found.
-Resolver = Callable[[str], set[str] | str]
+# Looks up a routine by name: returns what a call of it does, or the reason it
+# cannot be found.
+Resolver = Callable[[str], Effect | str]
 ANNOTATE = "add a lint: clobbers or lint: targets annotation"
 
 
@@ -177,7 +177,7 @@ def _link(
             node.successors.append(index)
         elif following:
             via = f"falling through into {following.header.title}"
-            node.calls.append(Call(via, following.declared, tail=True))
+            node.calls.append(Call(via, following.effect, tail=True))
             node.exit = node.exit or "tail"
         else:
             node.falls_off = True
@@ -185,9 +185,14 @@ def _link(
     def key(target: str) -> str:
         return node.scope + target if is_local(target) else target
 
-    def leave(via: str, registers: set[str], kind: str) -> None:
-        """Record a call, or a jump out of the routine, that changes registers."""
-        node.calls.append(Call(via, registers, tail=kind == "jump"))
+    def leave(via: str, effect: Effect | set[str], kind: str) -> None:
+        """Record a call, or a jump out of the routine, that changes registers.
+
+        Of registers an annotation names, no more is known than that.
+        """
+        if not isinstance(effect, Effect):
+            effect = Effect(frozenset(effect))
+        node.calls.append(Call(via, effect, tail=kind == "jump"))
         if kind == "jump":
             node.exit = "tail"
 

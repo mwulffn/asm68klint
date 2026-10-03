@@ -57,6 +57,20 @@ class State:
 
 
 @dataclass(frozen=True)
+class Effect:
+    """What running some other code does to the registers.
+
+    ``changed`` are the registers that may not hold what they held before.
+    ``inputs`` are the ones it reads, and ``garbage`` the changed ones that
+    hold nothing of use afterwards; both are empty where that is not known.
+    """
+
+    changed: frozenset[str] = frozenset()
+    inputs: frozenset[str] = frozenset()
+    garbage: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class Call:
     """A call or jump to other code, and the registers that code changes.
 
@@ -65,8 +79,13 @@ class Call:
     """
 
     via: str  # for messages: "the call to Foo"
-    registers: frozenset[str] | set[str]
+    effect: Effect
     tail: bool = False
+
+    @property
+    def registers(self) -> frozenset[str]:
+        """The registers the call may change."""
+        return self.effect.changed
 
 
 @dataclass

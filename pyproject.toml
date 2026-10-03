@@ -3,6 +3,8 @@ name = "asm68klint"
 version = "0.1.0"
 description = "A linter for Motorola 68000 assembly: routine headers checked against what the code does to registers"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Michael Wulff Nielsen", email = "mwulff@gmail.com" }
 ]

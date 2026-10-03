@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from asm68klint.findings import Finding
-from asm68klint.flow import Node, State, analyse, step
+from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
 from asm68klint.header import Field
 from asm68klint.reader import read_source
+from asm68klint.reads import Reads, check_reads
 from asm68klint.registers import STACK, canonical
 from asm68klint.routines import Routine, check_label, check_orphans, find_routines
 from asm68klint.rules import chosen
@@ -40,16 +41,16 @@ class Unit:
                 self.exports.update(statement.operands)
 
 
-def resolve(name: str, unit: Unit, units: list[Unit]) -> set[str] | str:
+def resolve(name: str, unit: Unit, units: list[Unit]) -> Effect | str:
     """Find the routine a call in ``unit`` refers to.
 
-    Returns the registers its header declares as changed, or the reason the
-    call cannot be analysed. A routine in the same unit comes first, then
+    Returns what its header says a call of it does, or the reason the call
+    cannot be analysed. A routine in the same unit comes first, then
     exported routines of the other units, then their other global labels.
     """
     for routine in unit.routines:
         if routine.header.name == name:
-            return routine.declared
+            return routine.effect
     if is_local(name) or name in unit.labels:
         return "it has no routine header"
     found: dict[bool, dict[tuple[str, int], Routine]] = {True: {}, False: {}}
@@ -63,7 +64,7 @@ def resolve(name: str, unit: Unit, units: list[Unit]) -> set[str] | str:
         return "no routine of that name in the files given"
     if len(candidates) > 1:
         return "several files define a routine of that name"
-    return candidates[0].declared
+    return candidates[0].effect
 
 
 @dataclass
@@ -257,11 +258,18 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
     header = routine.header
     title = header.title
     summary = Summary()
+    reads = Reads()
     for choices in configurations(graph.nodes):
         states = analyse(graph.nodes, choices)
         check_paths(routine, graph, states, reserved, summary)
+        if not header.problems:
+            check_reads(routine, graph, choices, reserved, reads)
     findings = header.problems + routine.problems + check_label(routine)
-    findings += graph.problems + summary.findings
+    findings += (
+        graph.problems
+        + summary.findings
+        + sorted(reads.findings, key=lambda finding: finding.line)
+    )
     findings += check_unreachable(routine, graph, summary.reached)
 
     def report(where: Field, code: str, message: str) -> None:
@@ -281,6 +289,9 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
                 f"{register} is listed under {name} of {title} but is never changed"
             )
             report(header.fields[name], "R002", message)
+    for register in sorted(header.registers("In") - reads.used - reserved):
+        message = f"{register} is listed under In of {title} but is never read"
+        report(header.fields["In"], "R010", message)
     return findings
 
 

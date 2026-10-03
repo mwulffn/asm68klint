@@ -8,6 +8,9 @@ import pytest
 from asm68klint import lint_files
 
 Lint = Callable[..., list[str]]
+# The rules about reads have tests of their own; the others' snippets do not
+# bother to list what they read.
+READ_RULES = ("R007", "R008", "R009", "R010")
 
 
 @pytest.fixture
@@ -32,7 +35,10 @@ def lint(tmp_path: Path) -> Lint:
             path.write_text(text)
             if name.endswith(".s"):
                 paths.append(path)
-        findings = lint_files(paths, **(options or {}))
+        options = dict(options or {})
+        if "select" not in options:
+            options.setdefault("ignore", READ_RULES)
+        findings = lint_files(paths, **options)
         prefix = f"{tmp_path}/"
         return [
             f"{finding.file.removeprefix(prefix)}:{finding.line}:"

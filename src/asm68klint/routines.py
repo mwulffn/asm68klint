@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from asm68klint.annotations import parse_annotation
 from asm68klint.findings import Finding
+from asm68klint.flow import Effect
 from asm68klint.header import Header, is_header_start, parse_header
 from asm68klint.m68k import is_instruction
 from asm68klint.source import Statement, is_local
@@ -23,6 +24,16 @@ class Routine:
     def declared(self) -> set[str]:
         """The registers the header says the routine changes."""
         return self.header.registers("Out", "Clobbers")
+
+    @property
+    def effect(self) -> Effect:
+        """What a call of the routine does, as its header has it."""
+        results = self.header.registers("Out")
+        return Effect(
+            frozenset(self.declared),
+            frozenset(self.header.registers("In")),
+            frozenset(self.header.registers("Clobbers") - results),
+        )
 
 
 def find_routines(

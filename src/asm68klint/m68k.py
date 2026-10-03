@@ -2,7 +2,7 @@
 
 import re
 
-from asm68klint.registers import STACK, canonical, parse_list
+from asm68klint.registers import REGISTER_PATTERN, STACK, canonical, parse_list
 from asm68klint.source import Statement, words
 
 CONDITIONS = words("hi ls cc hs cs lo ne eq vc vs pl mi ge lt gt le")
@@ -31,10 +31,16 @@ WRITES_NONE = words(
 )
 WRITES_NONE |= BRANCHES
 
+# Instructions that write their destination without using what was in it.
+OVERWRITES = words("move movea moveq lea clr movem") | SET_ON_CONDITION
+# Instructions that clear a register when both operands are that register.
+CLEARS_ITSELF = words("sub suba eor")
+
 INSTRUCTIONS = WRITES_LAST | WRITES_ONLY | WRITES_FIRST | WRITES_BOTH | WRITES_NONE
 
 _POSTINCREMENT = re.compile(r"\(\s*(\w+)\s*\)\+")
 _PREDECREMENT = re.compile(r"-\(\s*(\w+)\s*\)")
+_REGISTER = re.compile(rf"(?<![\w.$])({REGISTER_PATTERN})(?![\w$])", re.IGNORECASE)
 
 
 def is_instruction(mnemonic: str | None) -> bool:
@@ -81,3 +87,29 @@ def written_registers(statement: Statement) -> set[str]:
         if register and register != STACK:
             written.add(register)
     return written
+
+
+def read_registers(statement: Statement) -> set[str]:
+    """Return the registers whose value an instruction uses.
+
+    That is every register in a source operand or inside an address, and a
+    destination register unless the instruction only overwrites it. The stack
+    pointer is included like any other.
+    """
+    mnemonic, operands = statement.mnemonic, statement.operands
+    names = [canonical(operand) for operand in operands]
+    if mnemonic in CLEARS_ITSELF and len(names) == 2 and names[0] == names[1]:
+        return set()
+    read: set[str] = set()
+    for position, operand in enumerate(operands):
+        overwritten = mnemonic in OVERWRITES and position == len(operands) - 1
+        if names[position]:
+            if not overwritten:
+                read.add(names[position])
+        elif mnemonic == "movem" and parse_list(operand) is not None:
+            if not overwritten:
+                read.update(parse_list(operand) or [])
+        else:
+            for name in _REGISTER.findall(operand):
+                read.add(canonical(name) or "")
+    return read

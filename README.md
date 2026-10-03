@@ -75,6 +75,26 @@ Warnings:
 
 - A register listed under `Out` or `Clobbers` that the routine never
   changes (a stale header).
+- A register read while it holds nothing of use: after a call to a routine
+  that lists it under `Clobbers`, before anything has been written to it
+  again (R007). This is the conflict a header is there to prevent: the
+  caller kept a value in a register the routine it calls uses for itself.
+  Passing such a register to another call, or returning it as an `Out`
+  register, counts as reading it. A register saved on the stack around
+  the call is fine. Only the first read is reported.
+- A register read before the routine has written it that is not listed
+  under `In` (R008). What a call needs (the `In` of the routine called)
+  is needed here too. Pushing a register to save it is not a read, and
+  reserved registers always hold something.
+- An `Out` register that some path to a return never sets (R009). An
+  `Out` register that is only a result some of the time is listed under
+  `Clobbers` as well, and is then not checked:
+  `Out: Z = found, and then d0 = it` with `Clobbers: d0`.
+- A register listed under `In` that the routine never reads (R010).
+
+After a call with a `lint: clobbers` annotation the registers it names
+count as changed, not as lost: the linter does not know which of them is
+a result.
 - Unreachable code, which is not checked.
 
 A register that the routine saves with a long push and restores with a
@@ -194,6 +214,10 @@ directories are searched before the file's.
 | R004 | interrupt-preserve | an interrupt handler that changes a register |
 | R005 | interrupt-clobbers | an interrupt handler whose `Clobbers` is not `-` |
 | R006 | unbalanced-stack | a stack that is not as it was found at a return |
+| R007 | clobbered-read | a register read after a call clobbered it (warning) |
+| R008 | undeclared-input | a register read and not under `In` (warning) |
+| R009 | unset-output | an `Out` register some path never sets (warning) |
+| R010 | unused-input | an `In` register that is never read (warning) |
 | F001 | unknown-call | a call or jump that cannot be followed |
 | F002 | missing-label | a branch to a label that is not there |
 | F003 | runs-into-data | execution runs into data |
@@ -279,6 +303,11 @@ Things that are reported although the code may be correct:
   exactly the same expression.
 - A register listed under `Out` that the routine passes through unchanged
   gets the stale-header warning.
+- A write of any size makes a register good again for the read rules:
+  `move.b` into a register whose upper bytes a call clobbered, followed by
+  a word read, is not noticed. The other way round, a path that cannot
+  happen (a call skipped only when the register is not needed later) is
+  reported.
 - A routine with a second entry point can only be called through that
   entry if the entry has a header of its own. A `bsr` to a local label is
   an error for the same reason.
