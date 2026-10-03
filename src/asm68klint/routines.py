@@ -20,6 +20,10 @@ class Routine:
     # Reserved registers the header's annotations allow the routine to write.
     allowed: set[str] = field(default_factory=set)
     problems: list[Finding] = field(default_factory=list)
+    # Rules that the header says are not to be reported for the routine.
+    ignored: set[str] = field(default_factory=set)
+    # True when the header says execution does not come back from it.
+    noreturn: bool = False
     # True for a routine without a header: what its fields hold was worked
     # out from its code.
     inferred: bool = False
@@ -40,6 +44,7 @@ class Routine:
             frozenset(self.header.registers("In")),
             frozenset(self.header.registers("Clobbers") - results),
             inputs_known=True,
+            returns=not self.noreturn,
         )
 
 
@@ -109,6 +114,10 @@ def _read_header_annotations(routine: Routine, lines: list[Statement]) -> None:
             routine.problems.append(annotation)
         elif annotation and annotation.keyword == "allow":
             routine.allowed |= annotation.registers
+        elif annotation and annotation.keyword == "ignore":
+            routine.ignored |= set(annotation.labels)
+        elif annotation and annotation.keyword == "noreturn":
+            routine.noreturn = True
         elif annotation:
             message = (
                 f"the lint annotation {annotation.keyword!r} cannot be used in a header"

@@ -5,27 +5,50 @@
 ``allow``     reserved registers that may be written
 ``inline``    the code called takes the data that follows the call and
               returns after it
+``out``       with ``clobbers``: the registers among them that hold a result;
+              the others hold nothing of use after the call
+``noreturn``  execution does not come back from here: a jump into another
+              program, a return into another task
+``ignore``    rules that are not to be reported here
 """
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from asm68klint.findings import Finding
 from asm68klint.registers import parse_list
+from asm68klint.rules import RULES
 from asm68klint.source import LABEL_PATTERN, Statement
 
-KEYWORDS = ("clobbers", "targets", "allow", "inline")
+KEYWORDS = ("clobbers", "targets", "allow", "inline", "out", "noreturn", "ignore")
+# The annotations that may stand in a routine's header, for the whole routine.
+IN_HEADER = ("allow", "noreturn", "ignore")
+REGISTERS = ("clobbers", "allow", "out")  # the annotations that take registers
 _ANNOTATION = re.compile(r"\blint:\s*(\S+)\s*(.*)", re.IGNORECASE)
 _LABEL = re.compile(LABEL_PATTERN)
 
 
 @dataclass
 class Annotation:
-    """One annotation, with its arguments parsed."""
+    """One annotation, with its arguments parsed.
+
+    ``labels`` holds the labels of ``targets`` and the rule codes of ``ignore``.
+    """
 
     keyword: str
     registers: set[str]
     labels: list[str]
+
+
+def is_rule(text: str) -> bool:
+    """True for a rule's code or the beginning of some."""
+    return bool(text) and any(code.startswith(text.upper()) for code in RULES)
+
+
+def ignored(code: str, prefixes: Iterable[str]) -> bool:
+    """True when a rule is among those an ``ignore`` annotation names."""
+    return code.startswith(tuple(prefixes)) if prefixes else False
 
 
 def parse_annotation(statement: Statement) -> Annotation | Finding | None:
@@ -38,12 +61,15 @@ def parse_annotation(statement: Statement) -> Annotation | Finding | None:
     annotation = Annotation(keyword, set(), [])
     if keyword not in KEYWORDS:
         message = f"unknown lint annotation {match.group(1)!r}"
-    elif keyword == "inline":
+    elif keyword in ("inline", "noreturn") and not argument:
+        return annotation
+    elif keyword == "ignore" and all(map(is_rule, items)):
+        annotation.labels = [item.upper() for item in items]
         return annotation
     elif keyword == "targets" and all(_LABEL.fullmatch(item) for item in items):
         annotation.labels = items
         return annotation
-    elif keyword != "targets" and (argument == "-" or all(map(parse_list, items))):
+    elif keyword in REGISTERS and (argument == "-" or all(map(parse_list, items))):
         for item in items:
             annotation.registers.update(parse_list(item) or [])
         return annotation

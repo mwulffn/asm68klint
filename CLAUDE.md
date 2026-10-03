@@ -108,7 +108,7 @@ routines whose callees changed.
 - What code called inside a routine reads is not checked against `In`.
 - Branches to `*+N` other than the conditional return (`beq.s *+4` over a
   one-word instruction): they need the length of instructions.
-- A `lint: out d0` annotation, so that a result of an annotated call is
-  known and the rest counts as lost.
+- An annotation for what an annotated call reads (`lint: in`), which
+  would let `--free` say more before such a call.
 - CPU32 and ColdFire if ever wanted; 68020 addressing modes are read for
   their registers but not checked against `--cpu`.

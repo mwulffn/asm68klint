@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from asm68klint.annotations import ignored
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph, refresh
@@ -266,6 +267,8 @@ def check_paths(
             report(node.statement, "F004", f"execution runs off the end of {title}")
 
     exits = collect_exits(nodes, states)
+    if routine.noreturn:
+        return  # however it ends, it does not give its registers back
     if inside:
         for node in exits.unbalanced:
             message = f"the stack is not balanced when code called in {title} returns"
@@ -513,15 +516,26 @@ def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
     for unit in units:
         if not options.infer:
             findings.update(check_orphans(unit.orphans))
+    quiet: dict[tuple[str, int], set[str]] = {}  # lines with rules to ignore
     for routine, graph in graphs(units, options):
-        findings.update(check_routine(routine, graph, reserved, options.infer))
+        found = check_routine(routine, graph, reserved, options.infer)
         if options.cpu:
-            findings.update(check_processor(graph, options.cpu, options.fpu))
+            found += check_processor(graph, options.cpu, options.fpu)
+        findings.update(f for f in found if not ignored(f.code, routine.ignored))
+        for node in graph.nodes:
+            if "ignore" in node.annotations:
+                place = (node.statement.file, node.statement.line)
+                quiet.setdefault(place, set()).update(node.annotations["ignore"].labels)
     if any(code.startswith("T") for code in options.codes):
         sources = [unit.statements for unit in units]
         findings.update(check_style(list(map(Path, paths)), sources, options))
     return sorted(
-        (finding for finding in findings if finding.code in options.codes),
+        (
+            finding
+            for finding in findings
+            if finding.code in options.codes
+            and not ignored(finding.code, quiet.get((finding.file, finding.line), ()))
+        ),
         key=lambda finding: (
             finding.file,
             finding.line,

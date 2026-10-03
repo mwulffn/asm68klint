@@ -74,6 +74,7 @@ class Effect:
     garbage: frozenset[str] = frozenset()
     # False when the code may read more registers than ``inputs`` says.
     inputs_known: bool = False
+    returns: bool = True  # False when execution does not come back from it
 
 
 @dataclass(frozen=True)

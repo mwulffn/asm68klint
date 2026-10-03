@@ -152,6 +152,9 @@ An annotation is a comment of the form `; lint: keyword arguments`.
 | `; lint: targets Foo, Bar, .Case` | The indirect call or jump on this line goes to one of these labels. Routines are inherited from; labels inside the routine are followed. |
 | `; lint: allow a5, a6` | These reserved registers may be written. |
 | `; lint: inline` | The routine called takes the data that follows the call (a text, say) and returns after it. |
+| `; lint: out d0` | With `clobbers` on the same instruction: these registers hold a result of the call; the other registers `clobbers` names hold nothing of use after it, so that reading one is found (R007). |
+| `; lint: noreturn` | Execution does not come back from here: a jump into another program, a return into another task. Nothing is checked at this exit, and the jump need not be one the linter can follow. On a conditional branch it is said of the branch taken. |
+| `; lint: ignore R004, R006` | These rules are not reported here. A rule is named by its code or the beginning of one. |
 
 Where an annotation applies:
 
@@ -159,8 +162,13 @@ Where an annotation applies:
 - On a comment line of its own, it applies to the next instruction.
 - On (or before) a macro call, it applies to every instruction of that
   macro's expansion. Annotations may also be written inside a macro.
-- In a routine header, only `allow` is permitted, and it applies to the
-  whole routine. This is meant for startup code and interrupt handlers.
+- An instruction takes one annotation of a kind; a second annotation for
+  it goes on a comment line of its own before it.
+- In a routine header `allow`, `ignore` and `noreturn` are permitted, and
+  apply to the whole routine. `allow` is meant for startup code and
+  interrupt handlers. `noreturn` in a header says the routine never
+  returns: its exits are not checked, a `bsr` to it ends the path in the
+  caller, and so does a jump to it.
 
 ```
 ;--
@@ -188,7 +196,15 @@ the register must be restored or be listed under `Out` or `Clobbers`.
 
 After a call with a `lint: clobbers` annotation the registers it names
 count as changed, not as lost: the linter does not know which of them is
-a result.
+a result, unless `lint: out` says.
+
+```
+	; lint: out d0
+	jsr	(a2)			; lint: clobbers d0-d1/a0-a1
+
+	movem.l	(sp)+,d0-d7/a0-a6
+	rte				; lint: noreturn
+```
 
 ## Code without headers
 

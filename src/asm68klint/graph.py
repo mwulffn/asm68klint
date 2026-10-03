@@ -346,6 +346,8 @@ def _link(
     name = direct_target(operands[-1]) if operands else None
     clobbers = node.annotations.get("clobbers")
     targets = node.annotations.get("targets")
+    out = node.annotations.get("out")
+    stops: list[str] = []  # the kinds of going elsewhere that do not come back
 
     def follow(index: int) -> None:
         """Go on to the node that comes next, or out of the end of the routine."""
@@ -377,7 +379,12 @@ def _link(
         Of registers an annotation names, no more is known than that.
         """
         if not isinstance(effect, Effect):
-            effect = Effect(frozenset(effect))
+            results = node.annotations["out"].registers if out else set()
+            lost = frozenset(effect - results) if out else frozenset()
+            effect = Effect(frozenset(effect | results), garbage=lost)
+        if not effect.returns:
+            stops.append(kind)  # nothing comes back: no more is to be said of it
+            return
         node.calls.append(Call(via, effect, tail=kind == "jump"))
         if kind == "jump":
             node.exit = "tail"
@@ -439,6 +446,14 @@ def _link(
             message = f"cannot analyse the indirect {kind} {text}; {ANNOTATE}"
             node.errors.append(("F001", message))
 
+    conditional = mnemonic in BRANCHES or mnemonic in LOOPS
+    if "noreturn" in node.annotations and node.kind == "code":
+        if conditional:  # only the branch taken is gone for good
+            follow(node.index + 1)
+        return
+    if out and not clobbers:
+        message = "lint: out says which of the registers of lint: clobbers are results"
+        node.errors.append(("S005", message + ": there is no lint: clobbers here"))
     node.exit = RETURNS.get(mnemonic)
     if node.exit or node.is_data:
         return
@@ -464,6 +479,8 @@ def _link(
         transfer("jump")
     elif mnemonic == "movem" and not any(map(parse_list, operands)):
         node.errors.append(("S004", f"cannot tell which registers {text} uses"))
+    if "call" in stops:
+        return  # the routine called does not return
     after = node.index + 1
     if "inline" in node.annotations:  # the code called returns after its data
         while after < len(graph.nodes) and graph.nodes[after].is_data:
