@@ -37,7 +37,12 @@ def test_handler_must_preserve_every_register(lint):
     body = body.replace("(sp)+,d0-d1/a5-a6", "(sp)+,d0/a5-a6")
     expected = ["main.s:13: error: interrupt handler VBlank must preserve d1"]
     assert lint(handler(body)) == expected
-    assert lint(handler(body, out="d1 = status")) == expected
+
+
+def test_a_trap_handler_may_give_a_result(lint):
+    body = SAVING.replace("d0-d1/a5-a6,-(sp)", "d0/a5-a6,-(sp)")
+    body = body.replace("(sp)+,d0-d1/a5-a6", "(sp)+,d0/a5-a6")
+    assert lint(handler(body, out="d1 = status")) == []
 
 
 def test_handler_header_must_say_clobbers_nothing(lint):

@@ -179,6 +179,8 @@ def amount(text: str) -> Size:
         return int(text)
     if re.fullmatch(r"\$[0-9a-fA-F]+", text):
         return int(text[1:], 16)
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
+        return int(text, 16)
     return text
 
 

@@ -52,6 +52,24 @@ def problem(statement: Statement, code: str, message: str) -> Finding:
 LABEL_PATTERN = r"(?:[A-Za-z_]\w*\\)?(?:[A-Za-z_.][\w.]*\$?|\d+\$)"
 
 
+# A label whose name starts with this is neither the label of a routine nor
+# one that belongs to the global label before it: it is found from anywhere in
+# its file. The GNU assembler's labels are given such names: ``.done`` (to it a
+# label like any other) is kept as ``..done``, and ``1:``, found again as ``1b``
+# and ``1f``, as ``..n1_`` and a count.
+UNSCOPED = ".."
+NUMBERED = UNSCOPED + "n"
+
+
+def label_key(scope: str, label: str) -> str:
+    """Return the name a label is kept under, given the global label before it."""
+    if label.startswith(UNSCOPED):
+        return label
+    if "\\" in label:  # Global\.local
+        return label.replace("\\", "")
+    return scope + label if is_local(label) else label
+
+
 def is_local(label: str) -> bool:
     """True for a local label (``.name`` or ``name$``)."""
     return label.startswith(".") or label.endswith("$")

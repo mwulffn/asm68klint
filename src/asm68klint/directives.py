@@ -39,6 +39,21 @@ def code_label(statement: Statement) -> str | None:
     return label
 
 
+# Directives that put nothing in the program and change nothing the linter
+# follows, of the GNU assembler. They keep their dot.
+GAS_SILENT = words(
+    ".text .data .bss .section .extern .type .size .align .balign .p2align .even"
+    " .org .file .ident .weak .comm .lcomm .func .endfunc .title .list .nolist"
+    " .arch .cpu .loc .local .hidden .option .purgem .print .err .error .warning"
+    " .stabs .stabn .stabd .pushsection .popsection .previous .subsection"
+    " .altmacro .noaltmacro .eject .sbttl .psize .version .internal .protected"
+    " .lsym .abort .line .ln .desc .end"
+)
+
+
+OTHER |= GAS_SILENT | {"irp", "irpc"}
+
+
 def is_data(statement: Statement) -> bool:
     """True for a directive that emits data."""
     return statement.mnemonic in DATA and not is_ignored(statement)

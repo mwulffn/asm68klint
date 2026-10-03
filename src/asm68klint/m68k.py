@@ -36,6 +36,13 @@ OVERWRITES = words("move movea moveq lea clr movem") | SET_ON_CONDITION
 # Instructions that clear a register when both operands are that register.
 CLEARS_ITSELF = words("sub suba eor")
 
+# Instructions that take a size.
+SIZED = (
+    (WRITES_LAST | WRITES_ONLY | words("tst cmp cmpa cmpi cmpm chk"))
+    - words("lea moveq swap unlk nbcd tas abcd sbcd")
+    - SET_ON_CONDITION
+)
+
 INSTRUCTIONS = WRITES_LAST | WRITES_ONLY | WRITES_FIRST | WRITES_BOTH | WRITES_NONE
 
 _POSTINCREMENT = re.compile(r"\(\s*(\w+)\s*\)\+")
@@ -113,3 +120,16 @@ def read_registers(statement: Statement) -> set[str]:
             for name in _REGISTER.findall(operand):
                 read.add(canonical(name) or "")
     return read
+
+
+def normalise(statement: Statement) -> Statement:
+    """Give an instruction written in another way its usual mnemonic.
+
+    ``movel`` is ``move.l``: some assemblers take the size without its dot.
+    """
+    mnemonic = statement.mnemonic
+    if mnemonic and mnemonic not in INSTRUCTIONS and statement.size is None:
+        stem, size = mnemonic[:-1], mnemonic[-1]
+        if size in "bwl" and stem in SIZED:
+            statement.mnemonic, statement.size = stem, size
+    return statement

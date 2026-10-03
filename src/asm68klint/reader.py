@@ -4,12 +4,19 @@ The result is one flat list of statements, as the assembler would see them,
 except that conditional assembly is left in: the linter checks every branch.
 """
 
+import os
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
+from asm68klint import gas
 from asm68klint.findings import Finding
-from asm68klint.source import Statement, parse_statement, problem, split_comment
+from asm68klint.m68k import normalise
+from asm68klint.source import Statement, parse_statement, problem
+
+SYNTAXES = ("auto", "motorola", "gas")
+Parser = Callable[[str, int, str], Statement]
 
 MAX_DEPTH = 50
 _ESCAPE = re.compile(r"\\([@#0-9])")
@@ -34,36 +41,66 @@ def find_file(directory: Path, name: str) -> Path | None:
     return directory if directory.is_file() else None
 
 
+@dataclass
+class Macro:
+    """A macro: its lines, the names of its arguments, and how to read it."""
+
+    lines: list[str]
+    parameters: tuple[str, ...]
+    parse: Parser
+
+
 class Reader:
     """Reads one source file given on the command line and all it includes."""
 
-    def __init__(self, include_dirs: Iterable[Path] = ()) -> None:
+    def __init__(self, include_dirs: Iterable[Path] = (), syntax: str = "auto") -> None:
         self.statements: list[Statement] = []
         self.findings: list[Finding] = []
         self.include_dirs = [Path(directory) for directory in include_dirs]
-        self.macros: dict[str, list[str]] = {}
+        self.syntax = syntax
+        self.macros: dict[str, Macro] = {}
         # Names defined with equr or reg, and the register (list) they stand for.
         self.aliases: dict[str, str] = {}
         self.alias_pattern: re.Pattern | None = None
         self.files_read: set[Path] = set()
         self.expansions = 0
+        self.home = Path()  # the directory of the file given on the command line
+
+    def parser(self, lines: list[str]) -> tuple[Parser, list[str]]:
+        """Return how to read a file's lines, and the lines to read."""
+        if self.syntax == "gas" or (
+            self.syntax == "auto" and gas.looks_like_gas(lines)
+        ):
+            numbered = gas.Numbered()
+
+            def parse(file: str, line: int, text: str) -> Statement:
+                return normalise(gas.parse_statement(file, line, text, numbered))
+
+            return parse, gas.strip_block_comments(lines)
+        return lambda file, line, text: normalise(
+            parse_statement(file, line, text)
+        ), lines
 
     def read_file(self, path: Path) -> None:
         """Read a file, unless it has been read already."""
         if path.resolve() in self.files_read:
             return
         self.files_read.add(path.resolve())
-        lines = iter(enumerate(path.read_text(errors="replace").splitlines(), 1))
+        parse, texts = self.parser(path.read_text(errors="replace").splitlines())
+        lines = iter(enumerate(texts, 1))
         for number, text in lines:
-            statement = parse_statement(str(path), number, text)
+            statement = parse(str(path), number, text)
             if statement.mnemonic == "end":
                 break
             if statement.mnemonic == "rem":
-                self._skip(lines, "erem", statement, "rem has no erem")
+                self._skip(lines, "erem", statement, "rem has no erem", parse)
             elif statement.mnemonic == "macro":
-                name = statement.label or "".join(statement.operands[:1])
+                name, parameters = statement.label, statement.operands
+                if not name:  # macro NAME, as vasm also has it
+                    name, parameters = "".join(parameters[:1]), ()
                 missing = f"macro {name} has no endm"
-                self.macros[name] = self._skip(lines, "endm", statement, missing)
+                skipped = self._skip(lines, "endm", statement, missing, parse)
+                self.macros[name] = Macro(skipped, parameters, parse)
             else:
                 self._add(statement, path.parent)
 
@@ -73,6 +110,7 @@ class Reader:
         last: str,
         start: Statement,
         missing: str,
+        parse: Parser,
     ) -> list[str]:
         """Consume lines up to the one with the given directive; return them.
 
@@ -80,7 +118,7 @@ class Reader:
         """
         skipped: list[str] = []
         for number, text in lines:
-            if parse_statement("", number, text).mnemonic == last:
+            if parse("", number, text).mnemonic == last:
                 return skipped
             skipped.append(text)
         self.findings.append(problem(start, "S003", missing))
@@ -112,10 +150,10 @@ class Reader:
     def _include(self, statement: Statement, directory: Path) -> None:
         """Read an include file, looking next to the including file first."""
         name = statement.operands[0].strip("\"'")
-        for candidate in [directory, Path(), *self.include_dirs]:
+        for candidate in [directory, self.home, Path(), *self.include_dirs]:
             found = find_file(candidate, name)
             if found:
-                self.read_file(found)
+                self.read_file(Path(os.path.normpath(found)))
                 return
         self.findings.append(
             problem(statement, "S001", f"cannot find the include file {name!r}")
@@ -137,10 +175,17 @@ class Reader:
             call.expansion = self.expansions
         call.is_macro_call = True
         self.statements.append(call)
+        macro = self.macros[call.name]
         arguments = [
             argument[1:-1] if argument[:1] == "<" else argument
             for argument in call.operands
         ]
+        named = dict(zip(macro.parameters, arguments, strict=False))
+        named.update(dict.fromkeys(macro.parameters[len(arguments) :], ""))
+        names = "|".join(sorted(map(re.escape, named), key=len, reverse=True))
+        by_name = (
+            re.compile(rf"\\(?:({names})(?![\w$])|\{{({names})\}})") if named else None
+        )
 
         def fill(match: re.Match) -> str:
             key = match.group(1)
@@ -152,11 +197,16 @@ class Reader:
                 return call.size or "w"
             return arguments[int(key) - 1] if int(key) <= len(arguments) else ""
 
-        for text in self.macros[call.name]:
-            line = parse_statement(call.file, call.line, _ESCAPE.sub(fill, text))
+        for text in macro.lines:
+            if by_name:
+                text = by_name.sub(
+                    lambda match: named[match.group(1) or match.group(2)], text
+                )
+                text = text.replace("\\()", "")
+            line = macro.parse(call.file, call.line, _ESCAPE.sub(fill, text))
             line.macro = call.macro
             line.expansion = call.expansion
-            unknown = re.search(r"\\.", split_comment(line.text)[0])
+            unknown = re.search(r"\\.", line.text[: len(line.text) - len(line.comment)])
             if unknown:
                 message = f"cannot expand '{unknown.group()}' in macro {call.name}"
                 self.findings.append(Finding(call.file, call.line, "S003", message))
@@ -164,9 +214,14 @@ class Reader:
 
 
 def read_source(
-    path: Path, include_dirs: Iterable[Path] = ()
+    path: Path, include_dirs: Iterable[Path] = (), syntax: str = "auto"
 ) -> tuple[list[Statement], list[Finding]]:
-    """Read a source file into statements; also return what went wrong."""
-    reader = Reader(include_dirs)
+    """Read a source file into statements; also return what went wrong.
+
+    ``syntax`` is ``motorola``, ``gas`` (the GNU assembler's Motorola style) or
+    ``auto``, which decides for each file by what is in it.
+    """
+    reader = Reader(include_dirs, syntax)
+    reader.home = Path(path).parent
     reader.read_file(Path(path))
     return reader.statements, reader.findings

@@ -11,7 +11,7 @@ from asm68klint.directives import code_label, is_data
 from asm68klint.flow import direct_target
 from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
 from asm68klint.routines import Routine, find_routines
-from asm68klint.source import Statement, is_local
+from asm68klint.source import UNSCOPED, Statement, is_local, label_key
 
 CALLS = {"bsr", "jsr"}
 JUMPS = {"bra", "jmp"} | BRANCHES | LOOPS
@@ -24,7 +24,12 @@ def target(statement: Statement) -> str | None:
     if not statement.operands or statement.mnemonic not in CALLS | JUMPS:
         return None
     name = direct_target(statement.operands[-1])
-    return name if name and not is_local(name) else None
+    return name if name and place_label(name) else None
+
+
+def place_label(label: str) -> bool:
+    """True for a label that may start a routine: not one of a global label's."""
+    return not is_local(label) or label.startswith(UNSCOPED)
 
 
 def labels_of_code(statements: list[Statement]) -> set[str]:
@@ -35,6 +40,8 @@ def labels_of_code(statements: list[Statement]) -> set[str]:
         label = code_label(statement)
         if label:
             waiting.append(label)
+        elif (statement.label or "").startswith(UNSCOPED):
+            waiting.append(statement.label or "")
         if is_instruction(statement.mnemonic):
             found.update(waiting)
             waiting = []
@@ -78,21 +85,21 @@ def _add_missed(statements: list[Statement], starts: set[str], code: set[str]) -
     home: dict[str, int] = {}
     for index, routine in enumerate(routines):
         for statement in routine.body:
-            if code_label(statement):
-                home[statement.label or ""] = index
+            if statement.label and place_label(statement.label):
+                home[statement.label] = index
     found: set[str] = set()
     for index, routine in enumerate(routines):
         for statement in routine.body:
             name = target(statement)
             if name in home and home[name] != index:
                 found.add(name or "")
-        found |= _unreached(routine)
+        found |= _unreached(routine, code)
     found = (found & code) - starts
     starts |= found
     return bool(found)
 
 
-def _unreached(routine: Routine) -> set[str]:
+def _unreached(routine: Routine, code: set[str]) -> set[str]:
     """Return the first global label in a routine that its code does not get to.
 
     This follows the code roughly: conditional assembly is ignored, and a
@@ -107,7 +114,7 @@ def _unreached(routine: Routine) -> set[str]:
             scope = statement.label or ""
             places[scope] = index
         elif statement.label and is_local(statement.label):
-            places[scope + statement.label] = index
+            places[label_key(scope, statement.label)] = index
         scopes.append(scope)
     reached = [False] * len(body)
     pending = [0] if body else []
@@ -121,16 +128,13 @@ def _unreached(routine: Routine) -> set[str]:
                 break
             if mnemonic in JUMPS and statement.operands:
                 name = direct_target(statement.operands[-1]) or ""
-                if "\\" in name:
-                    name = name.replace("\\", "")
-                elif is_local(name):
-                    name = scopes[index] + name
+                name = label_key(scopes[index], name)
                 if name in places:
                     pending.append(places[name])
             if mnemonic in NO_FALL_THROUGH:
                 break
             index += 1
     for index, statement in enumerate(body):
-        if code_label(statement) and not reached[index]:
+        if code_label(statement) in code and not reached[index]:
             return {statement.label or ""}  # what follows it may be reached from it
     return set()

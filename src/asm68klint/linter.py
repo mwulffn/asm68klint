@@ -260,7 +260,7 @@ def check_paths(
             f"{subject} is {cause} but not listed under Out or Clobbers of {title}"
         )
         report(culprit.statement, "R001", message)
-    for register in sorted(unpreserved - {STACK}):
+    for register in sorted(unpreserved - {STACK} - header.registers("Out")):
         culprit = first_cause(nodes, exits.unpreserved, register)
         message = f"interrupt handler {title} must preserve {register}"
         report(culprit.statement, "R004", message)
@@ -300,7 +300,7 @@ def check_routine(routine: Routine, graph: Graph, reserved: set[str]) -> list[Fi
         findings.append(Finding(header.file, where.line, code, message))
 
     clobbers = header.fields.get("Clobbers")
-    if summary.is_interrupt and clobbers and clobbers.registers:
+    if summary.is_interrupt and clobbers.registers and not routine.inferred:
         message = f"the header of interrupt handler {title} must say Clobbers: -"
         report(clobbers, "R005", message)
     if not (summary.returns and summary.analysed):
@@ -366,12 +366,13 @@ def read_units(
     include_dirs: Iterable[Path] = (),
     infer: bool = False,
     platform: Platform | None = None,
+    syntax: str = "auto",
 ) -> tuple[list[Unit], set[Finding]]:
     """Read the source files and find their routines."""
     findings: set[Finding] = set()
     sources = []
     for path in paths:
-        statements, problems = read_source(Path(path), include_dirs)
+        statements, problems = read_source(Path(path), include_dirs, syntax)
         findings.update(problems)
         sources.append(statements)
     starts = find_starts(sources) if infer else [None] * len(sources)
@@ -389,6 +390,7 @@ def lint_files(
     ignore: Iterable[str] = (),
     infer: bool = False,
     platform: str | None = None,
+    syntax: str = "auto",
 ) -> list[Finding]:
     """Lint the given source files together and return the sorted findings.
 
@@ -398,11 +400,13 @@ def lint_files(
     beginning of one; nothing selected means all of them. With ``infer``, code
     need not have headers: what a routine without one does is worked out.
     ``platform`` names the machine the program is for (see ``PLATFORMS``).
+    ``syntax`` is the assembler's: ``motorola``, ``gas``, or ``auto`` to decide
+    for each file.
     """
     codes = chosen(select, ignore)
     reserved = {canonical(name) or name for name in reserved}
     machine = PLATFORMS[platform] if platform else None
-    units, findings = read_units(paths, reserved, include_dirs, infer, machine)
+    units, findings = read_units(paths, reserved, include_dirs, infer, machine, syntax)
     for unit in units:
         if not infer:
             findings.update(check_orphans(unit.orphans))
@@ -425,6 +429,7 @@ def describe_files(
     include_dirs: Iterable[Path] = (),
     infer: bool = False,
     platform: str | None = None,
+    syntax: str = "auto",
 ) -> list[str]:
     """Return a line for every routine saying what it reads and changes.
 
@@ -433,7 +438,7 @@ def describe_files(
     """
     reserved = {canonical(name) or name for name in reserved}
     machine = PLATFORMS[platform] if platform else None
-    units, _ = read_units(paths, reserved, include_dirs, infer, machine)
+    units, _ = read_units(paths, reserved, include_dirs, infer, machine, syntax)
     lines = []
     for unit in units:
         for routine in unit.routines:

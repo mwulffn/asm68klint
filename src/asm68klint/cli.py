@@ -10,6 +10,7 @@ from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
 from asm68klint.linter import DEFAULT_RESERVED, describe_files, lint_files
 from asm68klint.platforms import PLATFORMS
+from asm68klint.reader import SYNTAXES
 from asm68klint.registers import canonical
 from asm68klint.rules import RULES
 
@@ -67,6 +68,14 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--syntax",
+        choices=SYNTAXES,
+        help=(
+            "the assembler's syntax: motorola, gas (the GNU assembler's Motorola"
+            " style), or auto to decide for each file (the default)"
+        ),
+    )
+    parser.add_argument(
         "--platform",
         choices=sorted(PLATFORMS),
         help="the machine the program is for: what its system calls change",
@@ -111,8 +120,13 @@ def run(options: argparse.Namespace) -> int:
     platform = options.platform or settings.get("platform")
     if platform not in (None, *PLATFORMS):
         raise ValueError(f"{platform!r} is not a platform: {', '.join(PLATFORMS)}")
+    syntax = options.syntax or settings.get("syntax", "auto")
+    if syntax not in SYNTAXES:
+        raise ValueError(f"{syntax!r} is not a syntax: {', '.join(SYNTAXES)}")
     if options.effects:
-        lines = describe_files(options.files, reserved, include_dirs, infer, platform)
+        lines = describe_files(
+            options.files, reserved, include_dirs, infer, platform, syntax
+        )
         print(*lines, sep="\n")
         return 0
     findings = lint_files(
@@ -123,6 +137,7 @@ def run(options: argparse.Namespace) -> int:
         split(options.ignore, settings.get("ignore", [])),
         infer,
         platform,
+        syntax,
     )
     for finding in findings:
         print(finding)

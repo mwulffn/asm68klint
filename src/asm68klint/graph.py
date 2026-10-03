@@ -21,7 +21,7 @@ from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
 from asm68klint.platforms import Platform
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
-from asm68klint.source import Statement, is_local
+from asm68klint.source import Statement, is_local, label_key
 
 # Looks up a routine by name: returns what a call of it does, or the reason it
 # cannot be found.
@@ -168,7 +168,7 @@ class _Collector:
     def _read_label(self, statement: Statement) -> None:
         index = len(self.graph.nodes)
         if statement.label and is_local(statement.label):
-            self.graph.labels[self.scope + statement.label] = index
+            self.graph.labels[label_key(self.scope, statement.label)] = index
         elif code_label(statement):
             self.scope = statement.label
             self.graph.labels[self.scope] = index
@@ -248,9 +248,7 @@ def _link(
             node.falls_off = True
 
     def key(target: str) -> str:
-        if "\\" in target:  # Global\.local
-            return target.replace("\\", "")
-        return node.scope + target if is_local(target) else target
+        return label_key(node.scope, target)
 
     def leave(via: str, effect: Effect | set[str], kind: str) -> None:
         """Record a call, or a jump out of the routine, that changes registers.
