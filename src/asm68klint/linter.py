@@ -11,11 +11,11 @@ from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph
 from asm68klint.header import FIELDS, Field
 from asm68klint.infer import find_starts, place_label
-from asm68klint.m68k import needs
+from asm68klint.m68k import needs, read_registers, written_registers
 from asm68klint.options import Options, make_options
 from asm68klint.reader import read_source
-from asm68klint.reads import Reads, check_reads
-from asm68klint.registers import STACK, format_list
+from asm68klint.reads import Reads, check_reads, live_registers
+from asm68klint.registers import REGISTERS, STACK, format_list
 from asm68klint.routines import Routine, check_label, check_orphans, find_routines
 from asm68klint.source import Statement, is_local, problem
 from asm68klint.tables import find_tables
@@ -481,3 +481,44 @@ def describe_files(paths: Iterable[Path], **settings: Any) -> list[str]:
                 text = f"In {fields['In']}; changes {fields['Clobbers']} (no header)"
             lines.append(f"{header.file}:{header.line}: {header.title}: {text}")
     return lines
+
+
+def free_registers(
+    paths: Iterable[Path], file: Path, line: int, **settings: Any
+) -> tuple[str, set[str], set[str]] | None:
+    """Say which registers new code at a line of a source file may use.
+
+    Returns the name of the routine the line is in, the registers that are
+    free there and the ones that are in use, or None if the line is in no
+    routine. A register is free when nothing later needs what is in it (see
+    ``live_registers``); reserved registers and the stack pointer never are.
+    The settings are those of ``make_options``.
+    """
+    options = make_options(**settings)
+    units, _ = read_units(paths, options)
+    wanted = Path(file).resolve()
+    for routine, graph in graphs(units, options):
+        own = [
+            node
+            for node in graph.nodes
+            if not node.borrowed and Path(node.statement.file).resolve() == wanted
+        ]
+        first = routine.header.line
+        if Path(routine.header.file).resolve() != wanted or not own:
+            first = own[0].statement.line if own else 0
+        if not own or not first <= line <= own[-1].statement.line:
+            continue
+        index = next(node.index for node in own if node.statement.line >= line)
+        live: set[str] = set()
+        for choices in configurations(graph.nodes):
+            live |= live_registers(routine, graph, choices)[index]
+        busy = live | set(options.reserved) | {STACK}
+        used = {
+            register
+            for node in graph.nodes
+            for register in written_registers(node.statement)
+            | read_registers(node.statement)
+        }
+        shown = {r for r in REGISTERS if not r.startswith("fp") or r in used}
+        return routine.header.title, shown - busy, shown & busy
+    return None

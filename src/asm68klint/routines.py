@@ -39,6 +39,7 @@ class Routine:
             frozenset(self.declared),
             frozenset(self.header.registers("In")),
             frozenset(self.header.registers("Clobbers") - results),
+            inputs_known=True,
         )
 
 

@@ -164,3 +164,54 @@ def check_reads(
             if (register, why) not in seen:
                 seen.add((register, why))
                 reads.findings.add(finding)
+
+
+def live_registers(
+    routine: Routine, graph: Graph, choices: dict[str, bool]
+) -> list[set[str]]:
+    """Return, for each node, the registers whose value is still needed there.
+
+    A value is needed when something later reads it before writing the
+    register: an instruction, a call that takes it, or the return, which needs
+    the ``Out`` registers and every register the routine may not change. A
+    register that is not needed is free: new code there may use it. A call
+    that may read more than is known of it needs every register.
+    """
+    nodes = graph.nodes
+    header = routine.header
+    kept = set(REGISTERS) - (header.registers("Clobbers") - header.registers("Out"))
+    needed: list[set[str]] = []
+    written: list[set[str]] = []
+    for node in nodes:
+        reads = set(uses(node, routine)) if node.kind == "code" else set()
+        changed = written_registers(node.statement) if node.kind == "code" else set()
+        if node.kind == "code" and is_save(node):
+            reads |= read_registers(node.statement)
+        for call in node.calls:
+            reads |= set() if call.effect.inputs_known else set(REGISTERS)
+            changed |= set() if call.tail else call.effect.changed
+        if node.exit:
+            reads |= kept if node.exit != "tail" else kept - _results(node)
+        needed.append(reads - {STACK})
+        written.append(changed)
+    live: list[set[str]] = [set() for _ in nodes]
+    moving = True
+    while moving:
+        moving = False
+        for node in reversed(nodes):
+            after: set[str] = set()
+            for successor in successors(node, choices):
+                after |= live[successor]
+            before = needed[node.index] | (after - written[node.index])
+            if before != live[node.index]:
+                live[node.index] = before
+                moving = True
+    return live
+
+
+def _results(node: Node) -> set[str]:
+    """Return the registers that the code a node jumps to leaves changed."""
+    changed: set[str] = set()
+    for call in node.calls:
+        changed |= call.effect.changed if call.tail else set()
+    return changed

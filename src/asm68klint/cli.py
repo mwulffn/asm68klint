@@ -8,10 +8,11 @@ from pathlib import Path
 
 from asm68klint.config import find_config, read_config
 from asm68klint.findings import ERROR
-from asm68klint.linter import describe_files, lint_files
+from asm68klint.linter import describe_files, free_registers, lint_files
 from asm68klint.m68k import CPUS
 from asm68klint.options import DEFAULT_RESERVED, SYNTAXES
 from asm68klint.platforms import PLATFORMS
+from asm68klint.registers import format_list
 from asm68klint.rules import RULES
 
 
@@ -131,6 +132,11 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="list what every routine reads and changes, and do not lint",
     )
+    parser.add_argument(
+        "--free",
+        metavar="FILE:LINE",
+        help="say which registers new code at that line may use, and do not lint",
+    )
     parser.add_argument("--rules", action="store_true", help="list the rules and exit")
     options = parser.parse_args(arguments)
     if not options.files and not options.rules:
@@ -164,8 +170,23 @@ def gather(options: argparse.Namespace) -> dict:
 def run(options: argparse.Namespace) -> int:
     """Lint as the options and the configuration file say."""
     settings = gather(options)
+    for name in ("select", "ignore"):
+        settings.pop(name, None) if options.effects or options.free else None
     if options.effects:
         print(*describe_files(options.files, **settings), sep="\n")
+        return 0
+    if options.free:
+        file, _, line = options.free.rpartition(":")
+        if not line.isdigit():
+            raise ValueError(f"{options.free!r} is not FILE:LINE")
+        found = free_registers(options.files, Path(file), int(line), **settings)
+        if found is None:
+            raise ValueError(f"{options.free} is in no routine of the files given")
+        title, free, busy = found
+        print(
+            f"{options.free}: in {title}: free {format_list(free)};"
+            f" in use {format_list(busy)}"
+        )
         return 0
     findings = lint_files(options.files, **settings)
     for finding in findings:
