@@ -342,7 +342,7 @@ def check_routine(
     if summary.is_interrupt and clobbers.registers and not routine.inferred:
         message = f"the header of interrupt handler {title} must say Clobbers: -"
         report(clobbers, "R005", message)
-    if not (summary.returns and summary.analysed):
+    if not (summary.returns and summary.analysed) or routine.inferred:
         return findings  # nothing can be called stale
     for name in ("Out", "Clobbers"):
         if name == "Clobbers" and summary.is_interrupt:
