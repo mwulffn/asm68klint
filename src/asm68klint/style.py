@@ -25,10 +25,12 @@ _NAME = re.compile(r"[A-Za-z_.@][\w.@]*")
 
 # The Amiga's custom chip registers that can only be written, by Commodore's
 # names; a register that is read has another name (dmaconr) and is not here.
+# Nor are the strobes (copjmp1, strvbl): any access sets one off, and a read
+# is the usual way to do it.
 _WRITE_ONLY = re.compile(
     r"dskpt[hl]?|dsklen|dskdat|refptr|vposw|vhposw|copcon|serdat|serper|potgo|joytest"
-    r"|str(equ|vbl|hor|long)|bltcon[01]l?|blta[fl]wm|blt[abcd]pt[hl]?|bltsiz[ehv]"
-    r"|blt[abcd]mod|blt[abc]dat|sprhdat|dsksync|cop[12]lc[hl]?|copjmp[12]|copins"
+    r"|bltcon[01]l?|blta[fl]wm|blt[abcd]pt[hl]?|bltsiz[ehv]"
+    r"|blt[abcd]mod|blt[abc]dat|sprhdat|dsksync|cop[12]lc[hl]?|copins"
     r"|diwstrt|diwstop|diwhigh|ddfstrt|ddfstop|dmacon|clxcon|intena|intreq|adkcon"
     r"|aud[0-3](lc[hl]?|len|per|vol|dat)|bpl[1-8]pt[hl]?|bplcon[0-4]|bpl[12]mod"
     r"|bpl[1-8]dat|spr[0-7](pt[hl]?|pos|ctl|data|datb)|color[0-3]\d|beamcon0|fmode"
