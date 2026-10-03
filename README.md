@@ -154,7 +154,7 @@ An annotation is a comment of the form `; lint: keyword arguments`.
 | `; lint: inline` | The routine called takes the data that follows the call (a text, say) and returns after it. |
 | `; lint: out d0` | With `clobbers` on the same instruction: these registers hold a result of the call; the other registers `clobbers` names hold nothing of use after it, so that reading one is found (R007). |
 | `; lint: noreturn` | Execution does not come back from here: a jump into another program, a return into another task. Nothing is checked at this exit, and the jump need not be one the linter can follow. On a conditional branch it is said of the branch taken. |
-| `; lint: ignore R004, R006` | These rules are not reported here. A rule is named by its code or the beginning of one. |
+| `; lint: ignore R004, R006` | These rules are not reported here: on this line, whatever is on it (an instruction, a field, data). A rule is named by its code or the beginning of one. |
 
 Where an annotation applies:
 

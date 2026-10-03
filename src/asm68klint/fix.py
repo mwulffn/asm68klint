@@ -16,7 +16,7 @@ from asm68klint.linter import examine, graphs, read_units
 from asm68klint.options import make_options
 from asm68klint.registers import STACK, format_list
 from asm68klint.routines import Routine
-from asm68klint.source import UNSCOPED
+from asm68klint.source import UNSCOPED, read_file, write_file
 
 _FIELD = re.compile(r"(.*?Clobbers\s*:\s*)(.*)", re.IGNORECASE)
 # An edit: the file, the line, the new text of the line, and whether the text
@@ -45,10 +45,12 @@ def fix_files(paths: Iterable[Path], **settings: Any) -> dict[str, int]:
     units, _ = read_units(paths, options)
     edits: list[Edit] = []
     texts: dict[str, list[str]] = {}
+    endings: dict[str, str] = {}
 
     def lines_of(file: str) -> list[str]:
         if file not in texts:
-            texts[file] = Path(file).read_text(errors="replace").splitlines()
+            text, endings[file] = read_file(Path(file))
+            texts[file] = text.splitlines()
         return texts[file]
 
     for routine, graph in graphs(units, options):
@@ -81,5 +83,5 @@ def fix_files(paths: Iterable[Path], **settings: Any) -> dict[str, int]:
         lines[line - 1 : line - 1 + (not before)] = text.split("\n")
         changed[file] = changed.get(file, 0) + 1
     for file in changed:
-        Path(file).write_text("\n".join(texts[file]) + "\n")
+        write_file(Path(file), "\n".join(texts[file]) + "\n", endings[file])
     return changed

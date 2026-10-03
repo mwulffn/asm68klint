@@ -128,6 +128,18 @@ class Node:
     errors: list[tuple[str, str]] = field(default_factory=list)
 
     @property
+    def leaves(self) -> str | None:
+        """How the routine ends here for its caller: ``exit``, or None.
+
+        A jump to code that execution does not come back from ends the path
+        and not the routine: nothing is handed back there.
+        """
+        gone = self.exit == "tail" and not any(
+            call.tail and call.effect.returns for call in self.calls
+        )
+        return None if gone else self.exit
+
+    @property
     def is_data(self) -> bool:
         """True for a data directive."""
         return self.kind == "data"
@@ -207,7 +219,7 @@ def step(state: State, node: Node) -> State:
     before = state.registers
     dirty, stack = _execute(node.statement, set(before), state.stack)
     for call in node.calls:
-        if not call.tail:
+        if not call.tail and call.effect.returns:
             dirty |= call.registers - {STACK}
             stack = None if STACK in call.registers else stack
     marks = {(register, index) for register, index in state.dirty if register in dirty}
@@ -370,8 +382,9 @@ def changed_by(nodes: list[Node], entry: int) -> frozenset[str]:
     """
     changed: set[str] = set()
     for node, before in zip(nodes, analyse(nodes, {}, entry), strict=True):
-        if before is not None and node.exit:
+        if before is not None and node.leaves:
             changed |= step(before, node).registers
             for call in node.calls:
-                changed |= call.registers if call.tail else set()
+                comes_back = call.tail and call.effect.returns
+                changed |= call.registers if comes_back else set()
     return frozenset(changed - {STACK})

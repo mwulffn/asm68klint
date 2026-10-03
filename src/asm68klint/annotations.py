@@ -61,8 +61,8 @@ def parse_annotation(statement: Statement) -> Annotation | Finding | None:
     annotation = Annotation(keyword, set(), [])
     if keyword not in KEYWORDS:
         message = f"unknown lint annotation {match.group(1)!r}"
-    elif keyword in ("inline", "noreturn") and not argument:
-        return annotation
+    elif keyword in ("inline", "noreturn"):
+        return annotation  # what follows the word is a remark
     elif keyword == "ignore" and all(map(is_rule, items)):
         annotation.labels = [item.upper() for item in items]
         return annotation

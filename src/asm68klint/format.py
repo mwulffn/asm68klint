@@ -14,7 +14,7 @@ from asm68klint import gas
 from asm68klint.directives import DATA, ELSE, ELSE_IF, END_IF, IF, OTHER, SYMBOLS
 from asm68klint.m68k import INSTRUCTIONS
 from asm68klint.reader import parse_motorola
-from asm68klint.source import split_comment, words
+from asm68klint.source import read_file, split_comment, words, write_file
 
 TAB = 8
 COMMENT_COLUMN = 48
@@ -203,7 +203,7 @@ def format_files(
     """
     changed, passed, diff = [], [], []
     for path in map(Path, paths):
-        before = path.read_text(errors="surrogateescape")
+        before, ending = read_file(path)
         after = format_text(before, comment_column)
         if after is None:
             passed.append(str(path))
@@ -217,5 +217,5 @@ def format_files(
                 lineterm="",
             )
             if write:
-                path.write_text(after, errors="surrogateescape")
+                write_file(path, after, ending)
     return changed, passed, diff

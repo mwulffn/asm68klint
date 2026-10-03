@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from asm68klint.findings import Finding
 
@@ -154,3 +155,20 @@ def parse_statement(file: str, line: int, text: str) -> Statement:
     statement.size = size.lower() or None
     statement.operands = split_operands(field)
     return statement
+
+
+def read_file(path: Path) -> tuple[str, str]:
+    """Read a source file to be written back: its text and its line ending.
+
+    The text has plain newlines. Bytes that are not UTF-8 (a Latin-1 comment,
+    a text in an Amiga's character set) are kept as they are.
+    """
+    text = Path(path).read_bytes().decode("utf-8", "surrogateescape")
+    ending = "\r\n" if "\r\n" in text else "\n"
+    return text.replace("\r\n", "\n"), ending
+
+
+def write_file(path: Path, text: str, ending: str) -> None:
+    """Write a source file back with the line ending and the bytes it had."""
+    data = text.replace("\n", ending).encode("utf-8", "surrogateescape")
+    Path(path).write_bytes(data)

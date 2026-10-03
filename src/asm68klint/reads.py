@@ -49,7 +49,7 @@ def is_save(node: Node) -> bool:
 def uses(node: Node, routine: Routine) -> dict[str, str]:
     """Return the registers a node needs a value in, and what for."""
     needed: dict[str, str] = {}
-    if node.exit in ("rts", "tail"):
+    if node.leaves in ("rts", "tail"):
         # An Out register that is under Clobbers too is not always a result.
         header = routine.header
         results = header.registers("Out") - header.registers("Clobbers")
@@ -75,7 +75,7 @@ def step(marks: Marks, node: Node) -> Marks:
     lost: set[str] = set()
     written = written_registers(node.statement)
     for call in node.calls:
-        if not call.tail:  # a jump to other code does not come back
+        if not call.tail and call.effect.returns:  # a jump does not come back
             written |= call.effect.changed
             lost |= call.effect.garbage
     kept = {(register, why) for register, why in marks if register not in written}
@@ -96,7 +96,7 @@ def lost_values(
         header = routine.header
         results = header.registers("Out") - header.registers("Clobbers")
         wanted = results & call.effect.garbage
-        for register in sorted(wanted if call.tail else ()):
+        for register in sorted(wanted if call.tail and call.effect.returns else ()):
             message = f"{register} is returned by {title} after {call.via} clobbers it"
             found.append((register, node.index, ("R007", message)))
     for register, why in sorted(marks):
@@ -189,9 +189,10 @@ def live_registers(
             reads |= read_registers(node.statement)
         for call in node.calls:
             reads |= set() if call.effect.inputs_known else set(REGISTERS)
-            changed |= set() if call.tail else call.effect.changed
-        if node.exit:
-            reads |= kept if node.exit != "tail" else kept - _results(node)
+            comes_back = not call.tail and call.effect.returns
+            changed |= call.effect.changed if comes_back else set()
+        if node.leaves:
+            reads |= kept if node.leaves != "tail" else kept - _results(node)
         needed.append(reads - {STACK})
         written.append(changed)
     live: list[set[str]] = [set() for _ in nodes]
@@ -213,5 +214,6 @@ def _results(node: Node) -> set[str]:
     """Return the registers that the code a node jumps to leaves changed."""
     changed: set[str] = set()
     for call in node.calls:
-        changed |= call.effect.changed if call.tail else set()
+        comes_back = call.tail and call.effect.returns
+        changed |= call.effect.changed if comes_back else set()
     return changed

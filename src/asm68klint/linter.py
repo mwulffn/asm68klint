@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from asm68klint.annotations import ignored
+from asm68klint.annotations import Annotation, ignored, parse_annotation
 from asm68klint.findings import Finding
 from asm68klint.flow import Effect, Node, State, analyse, step
 from asm68klint.graph import Graph, build_graph, refresh
@@ -205,13 +205,13 @@ def collect_exits(nodes: list[Node], states: list[State | None]) -> Exits:
     """Gather the state at every reachable exit of a routine."""
     exits = Exits()
     for node, before in zip(nodes, states, strict=True):
-        if before is None or not node.exit:
+        if before is None or not node.leaves:
             continue
         exits.returns = True
         after = step(before, node)
         marks = set(after.dirty)
         for call in node.calls:
-            if call.tail:
+            if call.tail and call.effect.returns:
                 marks |= {(register, node.index) for register in call.registers}
         if after.stack != () or (STACK, node.index) in marks:
             marks.add((STACK, node.index))
@@ -267,13 +267,13 @@ def check_paths(
             report(node.statement, "F004", f"execution runs off the end of {title}")
 
     exits = collect_exits(nodes, states)
-    if routine.noreturn:
-        return  # however it ends, it does not give its registers back
     if inside:
         for node in exits.unbalanced:
             message = f"the stack is not balanced when code called in {title} returns"
             report(node.statement, "R006", message)
         return
+    if routine.noreturn:
+        return  # however it ends, it does not give its registers back
     declared = routine.declared
     changed = {register for register, _ in exits.changed}
     unpreserved = {register for register, _ in exits.unpreserved}
@@ -378,7 +378,8 @@ def check_routine(
         findings.append(Finding(header.file, where.line, code, message))
 
     clobbers = header.fields.get("Clobbers")
-    if summary.is_interrupt and clobbers.registers and not routine.inferred:
+    stated = clobbers is not None and bool(clobbers.registers)
+    if summary.is_interrupt and stated and not routine.inferred:
         message = f"the header of interrupt handler {title} must say Clobbers: -"
         report(clobbers, "R005", message)
     if not (summary.returns and summary.analysed) or routine.inferred:
@@ -504,6 +505,41 @@ def read_units(
     return units, findings
 
 
+def ignored_lines(units: list[Unit]) -> dict[tuple[str, int], set[str]]:
+    """Return the rules that ``lint: ignore`` says are not to be reported, by line.
+
+    An annotation at the end of a line holds for that line, whatever is on
+    it; one on a comment line of its own, for the next line that is not a
+    comment; one in a routine's header, for every line of the routine.
+    """
+    quiet: dict[tuple[str, int], set[str]] = {}
+
+    def add(file: str, line: int, codes: Iterable[str]) -> None:
+        quiet.setdefault((file, line), set()).update(codes)
+
+    for unit in units:
+        waiting: set[str] = set()
+        for statement in unit.statements:
+            found = parse_annotation(statement)
+            named = isinstance(found, Annotation) and found.keyword == "ignore"
+            codes = (
+                set(found.labels) if isinstance(found, Annotation) and named else set()
+            )
+            if statement.mnemonic is None:
+                waiting |= codes
+            elif codes | waiting:
+                add(statement.file, statement.line, codes | waiting)
+                waiting = set()
+        for routine in unit.routines:
+            header = routine.header
+            lines = {(header.file, header.line)}
+            lines |= {(header.file, field.line) for field in header.fields.values()}
+            lines |= {(statement.file, statement.line) for statement in routine.body}
+            for file, line in lines if routine.ignored else ():
+                add(file, line, routine.ignored)
+    return quiet
+
+
 def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
     """Lint the given source files together and return the sorted findings.
 
@@ -516,16 +552,11 @@ def lint_files(paths: Iterable[Path], **settings: Any) -> list[Finding]:
     for unit in units:
         if not options.infer:
             findings.update(check_orphans(unit.orphans))
-    quiet: dict[tuple[str, int], set[str]] = {}  # lines with rules to ignore
     for routine, graph in graphs(units, options):
-        found = check_routine(routine, graph, reserved, options.infer)
+        findings.update(check_routine(routine, graph, reserved, options.infer))
         if options.cpu:
-            found += check_processor(graph, options.cpu, options.fpu)
-        findings.update(f for f in found if not ignored(f.code, routine.ignored))
-        for node in graph.nodes:
-            if "ignore" in node.annotations:
-                place = (node.statement.file, node.statement.line)
-                quiet.setdefault(place, set()).update(node.annotations["ignore"].labels)
+            findings.update(check_processor(graph, options.cpu, options.fpu))
+    quiet = ignored_lines(units)
     if any(code.startswith("T") for code in options.codes):
         sources = [unit.statements for unit in units]
         findings.update(check_style(list(map(Path, paths)), sources, options))

@@ -347,7 +347,6 @@ def _link(
     clobbers = node.annotations.get("clobbers")
     targets = node.annotations.get("targets")
     out = node.annotations.get("out")
-    stops: list[str] = []  # the kinds of going elsewhere that do not come back
 
     def follow(index: int) -> None:
         """Go on to the node that comes next, or out of the end of the routine."""
@@ -379,12 +378,9 @@ def _link(
         Of registers an annotation names, no more is known than that.
         """
         if not isinstance(effect, Effect):
-            results = node.annotations["out"].registers if out else set()
+            results = out.registers if out else set()
             lost = frozenset(effect - results) if out else frozenset()
             effect = Effect(frozenset(effect | results), garbage=lost)
-        if not effect.returns:
-            stops.append(kind)  # nothing comes back: no more is to be said of it
-            return
         node.calls.append(Call(via, effect, tail=kind == "jump"))
         if kind == "jump":
             node.exit = "tail"
@@ -475,12 +471,13 @@ def _link(
     elif mnemonic == "trap":
         message = f"cannot analyse {text}; add a lint: clobbers annotation"
         node.errors.append(("F001", message))
-    elif mnemonic in BRANCHES or mnemonic in LOOPS:
+    elif conditional:
         transfer("jump")
     elif mnemonic == "movem" and not any(map(parse_list, operands)):
         node.errors.append(("S004", f"cannot tell which registers {text} uses"))
-    if "call" in stops:
-        return  # the routine called does not return
+    made = [call for call in node.calls if not call.tail]
+    if made and not any(call.effect.returns for call in made):
+        return  # none of the routines called here returns
     after = node.index + 1
     if "inline" in node.annotations:  # the code called returns after its data
         while after < len(graph.nodes) and graph.nodes[after].is_data:
