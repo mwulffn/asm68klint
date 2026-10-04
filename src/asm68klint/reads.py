@@ -6,13 +6,13 @@ it before something has been written to it is reported, and so is returning
 with an ``Out`` register in that state.
 """
 
-import re
 from dataclasses import dataclass, field
 
 from asm68klint.findings import Finding
-from asm68klint.flow import Node, successors
+from asm68klint.flow import successors
 from asm68klint.graph import Graph
-from asm68klint.m68k import read_registers, written_registers
+from asm68klint.m68k import PUSH, read_registers, written_registers
+from asm68klint.model import Exit, Kind, Node
 from asm68klint.registers import REGISTERS, STACK
 from asm68klint.routines import Routine
 from asm68klint.source import problem
@@ -23,7 +23,6 @@ ENTRY = -1  # it is not an input of the routine
 INPUT = -2  # not a reason: it holds an input that nothing has read yet
 Marks = frozenset[tuple[str, int]]
 
-_PUSH = re.compile(r"-\(\s*(sp|a7)\s*\)", re.IGNORECASE)
 SAVES = ("move", "movea", "movem")
 
 
@@ -42,14 +41,14 @@ def is_save(node: Node) -> bool:
     statement = node.statement
     if statement.mnemonic == "link":
         return True
-    pushes = bool(statement.operands) and _PUSH.fullmatch(statement.operands[-1])
+    pushes = bool(statement.operands) and PUSH.fullmatch(statement.operands[-1])
     return statement.mnemonic in SAVES and bool(pushes)
 
 
 def uses(node: Node, routine: Routine) -> dict[str, str]:
     """Return the registers a node needs a value in, and what for."""
     needed: dict[str, str] = {}
-    if node.leaves in ("rts", "tail"):
+    if node.leaves in (Exit.RTS, Exit.TAIL):
         # An Out register that is under Clobbers too is not always a result.
         header = routine.header
         results = header.registers("Out") - header.registers("Clobbers")
@@ -70,7 +69,7 @@ def uses(node: Node, routine: Routine) -> dict[str, str]:
 
 def step(marks: Marks, node: Node) -> Marks:
     """Return what holds nothing of use after a node."""
-    if node.kind != "code":
+    if node.kind != Kind.CODE:
         return marks
     lost: set[str] = set()
     written = written_registers(node.statement)
@@ -152,7 +151,7 @@ def check_reads(
                 pending.append(successor)
     seen: set[tuple[str, int]] = set()
     for node, marks in zip(nodes, states, strict=True):
-        if marks is None or node.kind != "code":
+        if marks is None or node.kind != Kind.CODE:
             continue
         needed = uses(node, routine)
         reads.used |= {register for register, why in marks if why == INPUT} & set(
@@ -183,16 +182,16 @@ def live_registers(
     needed: list[set[str]] = []
     written: list[set[str]] = []
     for node in nodes:
-        reads = set(uses(node, routine)) if node.kind == "code" else set()
-        changed = written_registers(node.statement) if node.kind == "code" else set()
-        if node.kind == "code" and is_save(node):
+        reads = set(uses(node, routine)) if node.kind == Kind.CODE else set()
+        changed = written_registers(node.statement) if node.kind == Kind.CODE else set()
+        if node.kind == Kind.CODE and is_save(node):
             reads |= read_registers(node.statement)
         for call in node.calls:
             reads |= set() if call.effect.inputs_known else set(REGISTERS)
             comes_back = not call.tail and call.effect.returns
             changed |= call.effect.changed if comes_back else set()
         if node.leaves:
-            reads |= kept if node.leaves != "tail" else kept - _results(node)
+            reads |= kept if node.leaves != Exit.TAIL else kept - _results(node)
         needed.append(reads - {STACK})
         written.append(changed)
     live: list[set[str]] = [set() for _ in nodes]

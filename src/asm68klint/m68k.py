@@ -9,7 +9,7 @@ the 68040 and 68060). Everything that depends on the processor is here and in
 import re
 
 from asm68klint.registers import REGISTER_PATTERN, STACK, canonical, parse_list
-from asm68klint.source import Statement, words
+from asm68klint.source import LABEL_PATTERN, Statement, words
 
 CPUS = ("68000", "68010", "68020", "68030", "68040", "68060")
 
@@ -26,6 +26,14 @@ LOOPS = {f"db{condition}" for condition in CONDITIONS | {"t", "f"}} | {"dbra"}
 LOOPS |= {f"fdb{condition}" for condition in FLOAT_CONDITIONS}
 TRAPS = {f"trap{condition}" for condition in CONDITIONS | {"t", "f"}}
 TRAPS |= {f"ftrap{condition}" for condition in FLOAT_CONDITIONS}
+# Jumps that are always taken, and calls.
+JUMPS = {"bra", "jmp"}
+CALLS = {"bsr", "jsr"}
+# Instructions that end a routine, and how: a return from an interrupt is
+# not like the others.
+RETURNS = {"rts": "rts", "rtr": "rts", "rtd": "rts", "rte": "rte"}
+# Instructions that move a list of registers.
+LIST_MOVES = {"movem", "fmovem"}
 
 # Floating point instructions that put their result in their last operand.
 FLOAT_ARITHMETIC = words(
@@ -113,6 +121,15 @@ SINCE.update(dict.fromkeys(words("ptestr ptestw"), "68030"))
 # How many bytes an operand of each size takes on the stack.
 WIDTHS = {"b": 2, "w": 2, "l": 4, "s": 4, "d": 8, "x": 12, "p": 12}
 
+# A push and a pop as operands: ``-(sp)`` and ``(sp)+``.
+PUSH = re.compile(r"-\(\s*(sp|a7)\s*\)", re.IGNORECASE)
+POP = re.compile(r"\(\s*(sp|a7)\s*\)\+", re.IGNORECASE)
+_TARGET = re.compile(
+    rf"({LABEL_PATTERN})(?:\(pc\))?|\(({LABEL_PATTERN}),pc\)"
+    rf"|\(({LABEL_PATTERN})\)(?:\.[wl])?",
+    re.IGNORECASE,
+)
+_SIZE_SUFFIX = re.compile(r"(?<=.)\.[wlsb]$", re.IGNORECASE)
 _POSTINCREMENT = re.compile(r"\(\s*(\w+)\s*\)\+")
 _PREDECREMENT = re.compile(r"-\(\s*(\w+)\s*\)")
 _REGISTER = re.compile(rf"(?<![\w.$])({REGISTER_PATTERN})(?![\w$])", re.IGNORECASE)
@@ -133,6 +150,17 @@ def needs(mnemonic: str | None, cpu: str, fpu: bool) -> str | None:
         return None if fpu or cpu in ("68040", "68060") else "a floating point unit"
     first = SINCE.get(mnemonic or "", "68000")
     return None if CPUS.index(first) <= CPUS.index(cpu) else f"a {first}"
+
+
+def direct_target(operand: str) -> str | None:
+    """Return the label a branch, jump or call goes to, or None if indirect."""
+    match = _TARGET.fullmatch(operand)
+    if not match or canonical(operand):
+        return None
+    name = match.group(1) or match.group(2) or match.group(3)
+    if canonical(name):  # (a0): through a register
+        return None
+    return _SIZE_SUFFIX.sub("", name)
 
 
 def width(statement: Statement) -> int:
@@ -178,11 +206,10 @@ def written_registers(statement: Statement) -> set[str]:
     pair (``d2:d3``, of a long division) or have a bit field (``d1{4:8}``).
     Pushes and pops through the stack pointer are not included.
     """
-    kept = statement.__dict__.get("_written")
-    if kept is not None:
-        return set(kept)
+    if statement.written is not None:
+        return set(statement.written)
     written: set[str] = set()
-    lists = statement.mnemonic in ("movem", "fmovem")
+    lists = statement.mnemonic in LIST_MOVES
     for operand in destinations(statement):
         for part in _BIT_FIELD.sub("", operand).split(":"):
             register = canonical(part)
@@ -194,7 +221,7 @@ def written_registers(statement: Statement) -> set[str]:
         register = stepped_register(operand)
         if register and register != STACK:
             written.add(register)
-    statement.__dict__["_written"] = frozenset(written)
+    statement.written = frozenset(written)
     return written
 
 
@@ -205,10 +232,9 @@ def read_registers(statement: Statement) -> set[str]:
     destination register unless the instruction only overwrites it. The stack
     pointer is included like any other.
     """
-    kept = statement.__dict__.get("_read")
-    if kept is None:
-        kept = statement.__dict__["_read"] = frozenset(_read_registers(statement))
-    return set(kept)
+    if statement.read is None:
+        statement.read = frozenset(_read_registers(statement))
+    return set(statement.read)
 
 
 def _read_registers(statement: Statement) -> set[str]:
@@ -222,7 +248,7 @@ def _read_registers(statement: Statement) -> set[str]:
         if names[position]:
             if not overwritten:
                 read.add(names[position])
-        elif mnemonic in ("movem", "fmovem") and parse_list(operand) is not None:
+        elif mnemonic in LIST_MOVES and parse_list(operand) is not None:
             if not overwritten:
                 read.update(parse_list(operand) or [])
         else:
@@ -259,7 +285,7 @@ def is_one_word(statement: Statement) -> bool:
     mnemonic = statement.mnemonic
     if mnemonic not in INSTRUCTIONS or mnemonic in FLOAT | LOOPS | BRANCHES:
         return False
-    if mnemonic in ("bsr", "jsr", "jmp", "bra", "movem", "link", "stop", "rtd"):
+    if mnemonic in JUMPS | CALLS | {"movem", "link", "stop", "rtd"}:
         return False
     for position, operand in enumerate(statement.operands):
         quick = mnemonic in QUICK and position == 0 and operand.startswith("#")

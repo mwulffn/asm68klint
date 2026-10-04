@@ -1,5 +1,6 @@
 """The command line."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from asm68klint.cli import main
+from asm68klint.rules import RULES
 
 GOOD = """\
 ;--
@@ -150,3 +152,10 @@ def test_pyproject_table_and_the_config_option(write, capsys):
 def test_pyproject_without_our_table_is_passed_over(write):
     write("pyproject.toml", '[project]\nname = "x"\n')
     assert main([write("bad.s", BAD)]) == 1
+
+
+def test_every_rule_code_in_the_source_is_a_rule():
+    source = Path(__file__).parent.parent / "src" / "asm68klint"
+    for path in source.glob("*.py"):
+        for code in re.findall(r'"([HRFST]\d{3})"', path.read_text()):
+            assert code in RULES, f"{path.name}: {code}"

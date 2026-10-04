@@ -27,6 +27,9 @@ OTHER = words(
     " echo printt printv fail cargs"
 )
 
+# Directives that give names to other files, and that take names from them.
+EXPORTS = words("xdef public global")
+IMPORTS = words("xref nref")
 
 # Directives whose label names a value, not a place in the program.
 SYMBOLS = words("= equ set fequ equr reg rs so fo macro rsset rsreset setso setfo")

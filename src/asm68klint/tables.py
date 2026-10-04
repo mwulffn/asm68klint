@@ -14,7 +14,7 @@ and a row of branches that is jumped into::
 import re
 
 from asm68klint.directives import code_label, is_data
-from asm68klint.flow import direct_target
+from asm68klint.m68k import JUMPS, direct_target
 from asm68klint.source import LABEL_PATTERN, UNSCOPED, Statement, is_local, label_key
 
 _OFFSET = re.compile(rf"({LABEL_PATTERN})\s*-\s*({LABEL_PATTERN})")
@@ -62,7 +62,7 @@ def find_tables(statements: list[Statement]) -> dict[str, list[str]]:
 
 def _entries(statement: Statement, label: str) -> list[str] | None:
     """Return where one line of a table leads, or None if it is not part of one."""
-    if statement.mnemonic in ("bra", "jmp") and statement.operands:
+    if statement.mnemonic in JUMPS and statement.operands:
         name = direct_target(statement.operands[-1])
         return [name] if name else None
     if not is_data(statement) or statement.mnemonic != "dc":

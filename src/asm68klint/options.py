@@ -3,12 +3,32 @@
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
-from asm68klint.flow import Effect
 from asm68klint.m68k import CPUS
+from asm68klint.model import Effect
 from asm68klint.platforms import PLATFORMS, Platform
 from asm68klint.registers import canonical, parse_list
 from asm68klint.rules import chosen
+
+
+class Settings(TypedDict, total=False):
+    """The settings of a lint run as they are given: see ``make_options``."""
+
+    reserved: Iterable[str]
+    include_dirs: Iterable[Path]
+    select: Iterable[str]
+    ignore: Iterable[str]
+    infer: bool
+    platform: str | None
+    syntax: str
+    extern: str | None
+    cpu: str | None
+    fpu: bool
+    define: Iterable[str]
+    undefine: Iterable[str]
+    extend_select: Iterable[str]
+
 
 DEFAULT_RESERVED = ("a5", "a6")
 SYNTAXES = ("auto", "motorola", "gas")

@@ -9,14 +9,15 @@ under ``Clobbers``, for a person to move the results to ``Out``.
 import re
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Unpack
 
 from asm68klint import gas
-from asm68klint.linter import examine, graphs, read_units
-from asm68klint.options import make_options
+from asm68klint.checks import examine
+from asm68klint.options import Settings, make_options
 from asm68klint.registers import STACK, format_list
 from asm68klint.routines import Routine
 from asm68klint.source import UNSCOPED, read_file, write_file
+from asm68klint.units import graphs, read_units
 
 _FIELD = re.compile(r"(.*?Clobbers\s*:\s*)(.*)", re.IGNORECASE)
 # An edit: the file, the line, the new text of the line, and whether the text
@@ -35,7 +36,7 @@ def new_header(routine: Routine, mark: str) -> str:
     )
 
 
-def fix_files(paths: Iterable[Path], **settings: Any) -> dict[str, int]:
+def fix_files(paths: Iterable[Path], **settings: Unpack[Settings]) -> dict[str, int]:
     """Correct and add headers in the source files; return the changes per file.
 
     The settings are those of ``make_options``. A routine whose code could not

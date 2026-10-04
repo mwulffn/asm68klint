@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from asm68klint.annotations import parse_annotation
 from asm68klint.directives import code_label, is_data
 from asm68klint.findings import Finding
-from asm68klint.flow import Effect
 from asm68klint.header import FIELDS, Field, Header, is_header_start, parse_header
 from asm68klint.m68k import is_instruction
+from asm68klint.model import Effect
 from asm68klint.source import UNSCOPED, Statement, is_local
 
 

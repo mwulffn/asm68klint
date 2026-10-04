@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+from asm68klint.directives import EXPORTS, IMPORTS
 from asm68klint.findings import Finding
 from asm68klint.m68k import BRANCHES, FLOAT, OVERWRITES, SIZED, is_instruction
 from asm68klint.options import Options
@@ -115,7 +116,7 @@ def check_fields(values: Values) -> list[Finding]:
     return findings
 
 
-def names_used(statements: list[Statement], but: tuple[str, ...]) -> set[str]:
+def names_used(statements: list[Statement], but: set[str]) -> set[str]:
     """Return every name in the operands of a file, but those of some directives."""
     used: set[str] = set()
     for statement in statements:
@@ -128,21 +129,19 @@ def names_used(statements: list[Statement], but: tuple[str, ...]) -> set[str]:
 def check_imports(paths: list[Path], sources: list[list[Statement]]) -> list[Finding]:
     """Report names imported and not used, and names exported that nobody imports."""
     findings = []
-    imports = ("xref", "nref")
-    exports = ("xdef", "public", "global")
-    used = [names_used(statements, imports + exports) for statements in sources]
-    wanted = [names_used(statements, exports) for statements in sources]
+    used = [names_used(statements, IMPORTS | EXPORTS) for statements in sources]
+    wanted = [names_used(statements, EXPORTS) for statements in sources]
     for index, (path, statements) in enumerate(zip(paths, sources, strict=True)):
         others: set[str] = set().union(*wanted[:index], *wanted[index + 1 :])
         for statement in statements:
             own = statement.file == str(path) and not statement.macro
-            if not own or statement.mnemonic not in imports + exports:
+            if not own or statement.mnemonic not in IMPORTS | EXPORTS:
                 continue
             for name in statement.operands:
-                if statement.mnemonic in imports and name not in used[index]:
+                if statement.mnemonic in IMPORTS and name not in used[index]:
                     message = f"{name} is imported and not used"
                     findings.append(problem(statement, "T006", message))
-                elif statement.mnemonic in exports and name not in others:
+                elif statement.mnemonic in EXPORTS and name not in others:
                     message = f"{name} is exported and no other file given uses it"
                     if len(sources) > 1:
                         findings.append(problem(statement, "T007", message))

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 
 from asm68klint.annotations import Annotation, parse_annotation
 from asm68klint.directives import (
@@ -16,8 +17,18 @@ from asm68klint.directives import (
     is_ignored,
 )
 from asm68klint.findings import Finding
-from asm68klint.flow import RETURNS, Call, Effect, Node, changed_by, direct_target
-from asm68klint.m68k import BRANCHES, LOOPS, is_instruction, is_one_word
+from asm68klint.flow import changed_by
+from asm68klint.m68k import (
+    BRANCHES,
+    CALLS,
+    JUMPS,
+    LOOPS,
+    RETURNS,
+    direct_target,
+    is_instruction,
+    is_one_word,
+)
+from asm68klint.model import Call, Effect, Exit, Kind, Node
 from asm68klint.platforms import Platform
 from asm68klint.registers import parse_list
 from asm68klint.routines import Routine
@@ -31,6 +42,13 @@ Resolver = Callable[[str], Effect | str]
 # the one that follows it, or None.
 Borrow = Callable[[str], tuple[Routine, Routine | None] | None]
 ANNOTATE = "add a lint: clobbers or lint: targets annotation"
+
+
+class _Transfer(StrEnum):
+    """The two ways to go to other code; the values are the words in messages."""
+
+    CALL = "call"
+    JUMP = "jump"
 
 
 @dataclass
@@ -97,8 +115,9 @@ def build_graph(
                 taken.add(id(found[0]))
                 collector.take(*found, borrowed=True)
     graph.resolve = resolve
+    linker = _Linker(graph, routine, resolve, platform, tables or {})
     for node in graph.nodes:
-        _link(node, graph, routine, resolve, platform, tables or {})
+        linker.link(node)
     _settle_local_calls(graph)
     return graph
 
@@ -122,10 +141,8 @@ def refresh(graph: Graph) -> None:
 def _jumps_to(node: Node) -> str | None:
     """Return the label an instruction jumps or branches to, if it names one."""
     statement = node.statement
-    jumps = (
-        statement.mnemonic in ("bra", "jmp") or statement.mnemonic in BRANCHES | LOOPS
-    )
-    if node.kind != "code" or not jumps or not statement.operands:
+    jumps = statement.mnemonic in JUMPS | BRANCHES | LOOPS
+    if node.kind != Kind.CODE or not jumps or not statement.operands:
         return None
     return direct_target(statement.operands[-1])
 
@@ -213,7 +230,7 @@ class _Collector:
         self.finish()
         if len(nodes) in self.graph.labels.values() and routine.body:
             last = routine.body[-1]  # a label with nothing after it
-            self._node(Statement(last.file, last.line, ""), "end")
+            self._node(Statement(last.file, last.line, ""), Kind.END)
         for node in nodes[start:]:
             node.borrowed = borrowed
             node.limit = len(nodes)
@@ -233,9 +250,9 @@ class _Collector:
         if mnemonic in IF | ELSE | ELSE_IF | END_IF:
             self._conditional(statement)
         elif is_data(statement):
-            self._node(statement, "data")
+            self._node(statement, Kind.DATA)
         else:
-            node = self._node(statement, "code")
+            node = self._node(statement, Kind.CODE)
             if statement.expansion and statement.expansion == self.spread[0]:
                 node.annotations.update(self.spread[1])
             node.annotations.update(self.pending)
@@ -258,7 +275,7 @@ class _Collector:
         """True inside a branch that a decided conditional does not take."""
         return any(isinstance(item, list) and not item[1] for item in self.conditionals)
 
-    def _node(self, statement: Statement, kind: str) -> Node:
+    def _node(self, statement: Statement, kind: Kind) -> Node:
         nodes = self.graph.nodes
         nodes.append(Node(statement, len(nodes), kind=kind, scope=self.scope))
         return nodes[-1]
@@ -312,14 +329,14 @@ class _Collector:
             self._close(*self.conditionals.pop())
         else:
             waiting, skips = self.conditionals.pop()
-            skips.append(self._node(statement, "skip"))
+            skips.append(self._node(statement, Kind.SKIP))
             if waiting:
                 waiting.jumps.append(len(self.graph.nodes))
             waiting = self._fork(statement) if mnemonic in ELSE_IF else None
             self.conditionals.append((waiting, skips))
 
     def _fork(self, statement: Statement) -> Node:
-        node = self._node(statement, "fork")
+        node = self._node(statement, Kind.FORK)
         node.condition, node.negated = condition(statement)
         return node
 
@@ -330,156 +347,195 @@ class _Collector:
                 node.jumps.append(len(self.graph.nodes))
 
 
-def _link(
-    node: Node,
-    graph: Graph,
-    routine: Routine,
-    resolve: Resolver,
-    platform: Platform | None,
-    tables: Mapping[str, list[str]],
-) -> None:
-    """Work out where execution goes after a node and what a call there changes."""
-    title = routine.header.title
-    mnemonic = node.statement.mnemonic or ""
-    operands = node.statement.operands
-    text = f"{mnemonic} {','.join(operands)}"
-    name = direct_target(operands[-1]) if operands else None
-    clobbers = node.annotations.get("clobbers")
-    targets = node.annotations.get("targets")
-    out = node.annotations.get("out")
+def _text(node: Node) -> str:
+    """Return an instruction as the messages show it."""
+    return f"{node.statement.mnemonic or ''} {','.join(node.statement.operands)}"
 
-    def follow(index: int) -> None:
+
+class _Linker:
+    """Works out where execution goes after each node and what a call there changes."""
+
+    def __init__(
+        self,
+        graph: Graph,
+        routine: Routine,
+        resolve: Resolver,
+        platform: Platform | None,
+        tables: Mapping[str, list[str]],
+    ) -> None:
+        self.graph = graph
+        self.title = routine.header.title
+        self.resolve = resolve
+        self.platform = platform
+        self.tables = tables
+
+    def link(self, node: Node) -> None:
+        """Give a node its successors, its calls and the way the routine ends there."""
+        mnemonic = node.statement.mnemonic or ""
+        operands = node.statement.operands
+        conditional = mnemonic in BRANCHES or mnemonic in LOOPS
+        if "noreturn" in node.annotations and node.kind == Kind.CODE:
+            if conditional:  # only the branch taken is gone for good
+                self._follow(node, node.index + 1)
+            return
+        if "out" in node.annotations and "clobbers" not in node.annotations:
+            message = (
+                "lint: out says which of the registers of lint: clobbers are results"
+            )
+            node.errors.append(("S005", message + ": there is no lint: clobbers here"))
+        node.exit = Exit(RETURNS[mnemonic]) if mnemonic in RETURNS else None
+        if node.exit or node.is_data:
+            return
+        if node.kind in (Kind.FORK, Kind.SKIP):
+            if node.kind == Kind.FORK:
+                self._follow(node, node.index + 1)
+            for index in node.jumps:
+                self._follow(node, index)
+            return
+        if mnemonic in JUMPS:
+            self._transfer(node, _Transfer.JUMP)
+            return
+        if mnemonic in CALLS:
+            self._transfer(node, _Transfer.CALL)
+        elif mnemonic == "trap":
+            self._trap(node)
+        elif conditional:
+            self._transfer(node, _Transfer.JUMP)
+        elif mnemonic == "movem" and not any(map(parse_list, operands)):
+            message = f"cannot tell which registers {_text(node)} uses"
+            node.errors.append(("S004", message))
+        made = [call for call in node.calls if not call.tail]
+        if made and not any(call.effect.returns for call in made):
+            return  # none of the routines called here returns
+        after = node.index + 1
+        if "inline" in node.annotations:  # the code called returns after its data
+            nodes = self.graph.nodes
+            while after < len(nodes) and nodes[after].is_data:
+                after += 1
+        self._follow(node, after)
+
+    def _follow(self, node: Node, index: int) -> None:
         """Go on to the node that comes next, or out of the end of the routine."""
-        following = graph.after.get(node.limit)
+        following = self.graph.after.get(node.limit)
         if index < node.limit:
             node.successors.append(index)
         elif following:
             via = f"falling through into {following.header.title}"
-            graph.links.append((node.index, len(node.calls), following))
+            self.graph.links.append((node.index, len(node.calls), following))
             node.calls.append(Call(via, following.effect, tail=True))
-            node.exit = node.exit or "tail"
+            node.exit = node.exit or Exit.TAIL
         else:
             node.falls_off = True
 
-    def key(target: str) -> str:
+    def _key(self, node: Node, target: str) -> str:
         """Return the name a label is kept under.
 
         Some assemblers take ``.Loop`` and ``.loop`` for one label: a label
         that is not there as written is looked for whatever its case.
         """
         name = label_key(node.scope, target)
-        if name not in graph.labels:
-            return graph.whatever_case().get(name.lower(), name)
+        if name not in self.graph.labels:
+            return self.graph.whatever_case().get(name.lower(), name)
         return name
 
-    def leave(via: str, effect: Effect | set[str], kind: str) -> None:
+    def _leave(
+        self, node: Node, via: str, effect: Effect | set[str], kind: _Transfer
+    ) -> None:
         """Record a call, or a jump out of the routine, that changes registers.
 
         Of registers an annotation names, no more is known than that.
         """
         if not isinstance(effect, Effect):
+            out = node.annotations.get("out")
             results = out.registers if out else set()
             lost = frozenset(effect - results) if out else frozenset()
             effect = Effect(frozenset(effect | results), garbage=lost)
-        node.calls.append(Call(via, effect, tail=kind == "jump"))
-        if kind == "jump":
-            node.exit = "tail"
+        node.calls.append(Call(via, effect, tail=kind == _Transfer.JUMP))
+        if kind == _Transfer.JUMP:
+            node.exit = Exit.TAIL
 
-    def go_to(target: str, kind: str) -> None:
+    def _go_to(self, node: Node, target: str, kind: _Transfer) -> None:
         """Call or jump to a label: one in this routine or another routine."""
-        if kind == "jump" and key(target) in graph.labels:
-            node.successors.append(graph.labels[key(target)])
+        labels = self.graph.labels
+        if kind == _Transfer.JUMP and self._key(node, target) in labels:
+            node.successors.append(labels[self._key(node, target)])
             return
-        if kind == "jump" and is_local(target) and not target.startswith(UNSCOPED):
-            message = f"cannot find the label {target} that {title} branches to"
+        local = is_local(target) and not target.startswith(UNSCOPED)
+        if kind == _Transfer.JUMP and local:
+            message = f"cannot find the label {target} that {self.title} branches to"
             node.errors.append(("F002", message))
             return
-        found = resolve(target)
+        found = self.resolve(target)
         if isinstance(found, str):
-            node.errors.append(
-                ("F001", f"cannot analyse the {kind} to {target}: {found}")
-            )
+            message = f"cannot analyse the {kind} to {target}: {found}"
+            node.errors.append(("F001", message))
         else:
-            graph.links.append((node.index, len(node.calls), target))
-            leave(f"the {kind} to {target}", found, kind)
+            self.graph.links.append((node.index, len(node.calls), target))
+            self._leave(node, f"the {kind} to {target}", found, kind)
 
-    def transfer(kind: str) -> None:
+    def _transfer(self, node: Node, kind: _Transfer) -> None:
         """Handle a call or jump, using the annotations where they are needed."""
-        known = platform.call(node.statement) if platform else None
+        labels = self.graph.labels
+        operands = node.statement.operands
+        text = _text(node)
+        name = direct_target(operands[-1]) if operands else None
+        clobbers = node.annotations.get("clobbers")
+        targets = node.annotations.get("targets")
+        known = self.platform.call(node.statement) if self.platform else None
         through = table_used(operands[-1]) if operands and not name else None
-        table = tables.get(key(through)) if through else None
-        if name and kind == "jump" and key(name) in graph.labels:
-            go_to(name, kind)
-        elif name and is_local(name) and key(name) in graph.labels:
-            node.local_calls.append(graph.labels[key(name)])
+        table = self.tables.get(self._key(node, through)) if through else None
+        if name and kind == _Transfer.JUMP and self._key(node, name) in labels:
+            self._go_to(node, name, kind)
+        elif name and is_local(name) and self._key(node, name) in labels:
+            node.local_calls.append(labels[self._key(node, name)])
         elif clobbers and name:
-            leave(f"the {kind} to {name}", clobbers.registers, kind)
+            self._leave(node, f"the {kind} to {name}", clobbers.registers, kind)
         elif clobbers:
-            leave(f"the indirect {kind} {text}", clobbers.registers, kind)
+            self._leave(node, f"the indirect {kind} {text}", clobbers.registers, kind)
         elif name:
-            go_to(name, kind)
+            self._go_to(node, name, kind)
         elif targets:
             for target in targets.labels:
-                go_to(target, kind)
-        elif table:
-            # A row of branches in this routine is jumped into; a table of
-            # offsets leads straight to where its entries say.
-            row = graph.labels.get(key(through or ""), len(graph.nodes))
-            rows = []
-            while row < len(graph.nodes) and kind == "jump":
-                if graph.nodes[row].statement.mnemonic not in ("bra", "jmp"):
-                    break
-                rows.append(row)
-                row += 1
-            node.successors.extend(rows)
-            for target in () if rows else table:
-                go_to(target, kind)
+                self._go_to(node, target, kind)
+        elif through and table:
+            self._through_table(node, through, table, kind)
         elif known:
-            leave(f"the system call {text}", known, kind)
-        elif kind == "jump" and _skips_one(node, graph):
+            self._leave(node, f"the system call {text}", known, kind)
+        elif kind == _Transfer.JUMP and _skips_one(node, self.graph):
             node.successors.append(node.index + 2)
         else:
             message = f"cannot analyse the indirect {kind} {text}; {ANNOTATE}"
             node.errors.append(("F001", message))
 
-    conditional = mnemonic in BRANCHES or mnemonic in LOOPS
-    if "noreturn" in node.annotations and node.kind == "code":
-        if conditional:  # only the branch taken is gone for good
-            follow(node.index + 1)
-        return
-    if out and not clobbers:
-        message = "lint: out says which of the registers of lint: clobbers are results"
-        node.errors.append(("S005", message + ": there is no lint: clobbers here"))
-    node.exit = RETURNS.get(mnemonic)
-    if node.exit or node.is_data:
-        return
-    if node.kind in ("fork", "skip"):
-        if node.kind == "fork":
-            follow(node.index + 1)
-        for index in node.jumps:
-            follow(index)
-        return
-    if mnemonic in ("bra", "jmp"):
-        transfer("jump")
-        return
-    if mnemonic in ("bsr", "jsr"):
-        transfer("call")
-    elif mnemonic == "trap" and clobbers:
-        leave(f"the {text}", clobbers.registers, "call")
-    elif mnemonic == "trap" and platform and platform.call(node.statement):
-        leave(f"the system call {text}", platform.call(node.statement), "call")
-    elif mnemonic == "trap":
-        message = f"cannot analyse {text}; add a lint: clobbers annotation"
-        node.errors.append(("F001", message))
-    elif conditional:
-        transfer("jump")
-    elif mnemonic == "movem" and not any(map(parse_list, operands)):
-        node.errors.append(("S004", f"cannot tell which registers {text} uses"))
-    made = [call for call in node.calls if not call.tail]
-    if made and not any(call.effect.returns for call in made):
-        return  # none of the routines called here returns
-    after = node.index + 1
-    if "inline" in node.annotations:  # the code called returns after its data
-        while after < len(graph.nodes) and graph.nodes[after].is_data:
-            after += 1
-    follow(after)
+    def _through_table(
+        self, node: Node, through: str, table: list[str], kind: _Transfer
+    ) -> None:
+        """Go where a jump table leads.
+
+        A row of branches in this routine is jumped into; a table of offsets
+        leads straight to where its entries say.
+        """
+        nodes = self.graph.nodes
+        row = self.graph.labels.get(self._key(node, through), len(nodes))
+        rows = []
+        while row < len(nodes) and kind == _Transfer.JUMP:
+            if nodes[row].statement.mnemonic not in JUMPS:
+                break
+            rows.append(row)
+            row += 1
+        node.successors.extend(rows)
+        for target in () if rows else table:
+            self._go_to(node, target, kind)
+
+    def _trap(self, node: Node) -> None:
+        """Handle a trap: a call of the system, or of what an annotation says."""
+        text = _text(node)
+        clobbers = node.annotations.get("clobbers")
+        known = self.platform.call(node.statement) if self.platform else None
+        if clobbers:
+            self._leave(node, f"the {text}", clobbers.registers, _Transfer.CALL)
+        elif known:
+            self._leave(node, f"the system call {text}", known, _Transfer.CALL)
+        else:
+            message = f"cannot analyse {text}; add a lint: clobbers annotation"
+            node.errors.append(("F001", message))

@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from asm68klint.flow import Effect
+from asm68klint.model import Effect
 from asm68klint.source import Statement, words
 
 _LIBRARY_CALL = re.compile(

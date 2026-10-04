@@ -9,12 +9,20 @@ preserved.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from asm68klint.m68k import destinations, saves_whole, written_registers
+from asm68klint.m68k import (
+    LIST_MOVES,
+    POP,
+    PUSH,
+    destinations,
+    saves_whole,
+    written_registers,
+)
 from asm68klint.m68k import width as operand_width
+from asm68klint.model import Kind, Node
 from asm68klint.registers import STACK, canonical, parse_list
-from asm68klint.source import LABEL_PATTERN, Statement
+from asm68klint.source import Statement
 
 # A stack slot is (size in bytes, what it holds). It holds either the entry
 # value of the named register, or None for anything else. A slot of size 0
@@ -25,22 +33,13 @@ Size = int | str
 Slot = tuple[Size, str | None]
 Stack = tuple[Slot, ...] | None  # None: the stack depth is unknown
 
-RETURNS = {"rts": "rts", "rtr": "rts", "rtd": "rts", "rte": "rte"}
 MOVES = ("move", "movea", "fmove")
-_PUSH = re.compile(r"-\(\s*(sp|a7)\s*\)", re.IGNORECASE)
-_POP = re.compile(r"\(\s*(sp|a7)\s*\)\+", re.IGNORECASE)
 _VIA_STACK = re.compile(r"\((.*,)?\s*(sp|a7)\s*[,)]", re.IGNORECASE)
 _AMOUNT = r"(-?)([\w$*/+]+)"
 _STACK_OFFSET = re.compile(
     rf"{_AMOUNT}\((?:sp|a7)\)|\({_AMOUNT},(?:sp|a7)\)", re.IGNORECASE
 )
 _IMMEDIATE = re.compile(rf"#{_AMOUNT}")
-_TARGET = re.compile(
-    rf"({LABEL_PATTERN})(?:\(pc\))?|\(({LABEL_PATTERN}),pc\)"
-    rf"|\(({LABEL_PATTERN})\)(?:\.[wl])?",
-    re.IGNORECASE,
-)
-_SIZE_SUFFIX = re.compile(r"(?<=.)\.[wlsb]$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -58,102 +57,6 @@ class State:
     def registers(self) -> set[str]:
         """The registers that may not hold their entry value."""
         return {register for register, _ in self.dirty}
-
-
-@dataclass(frozen=True)
-class Effect:
-    """What running some other code does to the registers.
-
-    ``changed`` are the registers that may not hold what they held before.
-    ``inputs`` are the ones it reads, and ``garbage`` the changed ones that
-    hold nothing of use afterwards; both are empty where that is not known.
-    """
-
-    changed: frozenset[str] = frozenset()
-    inputs: frozenset[str] = frozenset()
-    garbage: frozenset[str] = frozenset()
-    # False when the code may read more registers than ``inputs`` says.
-    inputs_known: bool = False
-    returns: bool = True  # False when execution does not come back from it
-
-
-@dataclass(frozen=True)
-class Call:
-    """A call or jump to other code, and the registers that code changes.
-
-    A tail call leaves the routine: its effect counts where the routine ends,
-    not on the instructions that follow.
-    """
-
-    via: str  # for messages: "the call to Foo"
-    effect: Effect
-    tail: bool = False
-    local: bool = False  # a call of code in the same routine
-
-    @property
-    def registers(self) -> frozenset[str]:
-        """The registers the call may change."""
-        return self.effect.changed
-
-
-@dataclass
-class Node:
-    """One instruction in a routine, with where execution goes next."""
-
-    statement: Statement
-    index: int = 0
-    successors: list[int] = field(default_factory=list)
-    # How the routine ends here: "rts", "rte", or "tail" for a jump elsewhere.
-    exit: str | None = None
-    # "code" for an instruction, "data" for a data directive, "end" for the end
-    # of a routine that has a label and nothing after it, and for
-    # conditional assembly "fork" (if) and "skip" (else). A fork goes on to the
-    # next node when its condition holds and to ``jumps`` when it does not; a
-    # skip, at the end of a branch, goes to ``jumps``, past the endc.
-    kind: str = "code"
-    jumps: list[int] = field(default_factory=list)
-    condition: str = ""  # what a fork tests
-    negated: bool = False  # the fork tests for the opposite of ``condition``
-    scope: str = ""  # the global label that local labels here belong to
-    annotations: dict = field(default_factory=dict)
-    calls: list[Call] = field(default_factory=list)
-    # True for code of another routine that this one jumps into, taken in to
-    # be followed from here; what is wrong in it is reported in its own.
-    borrowed: bool = False
-    limit: int = 0  # the node after the last of the routine this one is from
-    # Calls of code in the same routine: the nodes they go to.
-    local_calls: list[int] = field(default_factory=list)
-    falls_off: bool = False  # execution runs past the end of the file
-    # Why it cannot be analysed: (rule code, message) pairs.
-    errors: list[tuple[str, str]] = field(default_factory=list)
-
-    @property
-    def leaves(self) -> str | None:
-        """How the routine ends here for its caller: ``exit``, or None.
-
-        A jump to code that execution does not come back from ends the path
-        and not the routine: nothing is handed back there.
-        """
-        gone = self.exit == "tail" and not any(
-            call.tail and call.effect.returns for call in self.calls
-        )
-        return None if gone else self.exit
-
-    @property
-    def is_data(self) -> bool:
-        """True for a data directive."""
-        return self.kind == "data"
-
-
-def direct_target(operand: str) -> str | None:
-    """Return the label a branch, jump or call goes to, or None if indirect."""
-    match = _TARGET.fullmatch(operand)
-    if not match or canonical(operand):
-        return None
-    name = match.group(1) or match.group(2) or match.group(3)
-    if canonical(name):  # (a0): through a register
-        return None
-    return _SIZE_SUFFIX.sub("", name)
 
 
 def join(first: State | None, second: State) -> State:
@@ -214,7 +117,7 @@ def amount(text: str) -> Size:
 
 def step(state: State, node: Node) -> State:
     """Return the state after executing one instruction."""
-    if node.kind != "code":
+    if node.kind != Kind.CODE:
         return state
     before = state.registers
     dirty, stack = _execute(node.statement, set(before), state.stack)
@@ -236,9 +139,9 @@ def _execute(statement: Statement, dirty: set[str], stack: Stack) -> tuple[set, 
     saved = restored = None
     if mnemonic in MOVES and STACK not in map(canonical, operands):
         saved, restored = canonical(source), canonical(target)
-    if mnemonic in ("movem", "fmovem"):
-        pushed = parse_list(source) if _PUSH.fullmatch(target) else None
-        popped = parse_list(target) if _POP.fullmatch(source) else None
+    if mnemonic in LIST_MOVES:
+        pushed = parse_list(source) if PUSH.fullmatch(target) else None
+        popped = parse_list(target) if POP.fullmatch(source) else None
         for register in reversed(pushed or []):
             clean = long and register not in dirty
             stack = push(stack, width, register if clean else None)
@@ -252,9 +155,9 @@ def _execute(statement: Statement, dirty: set[str], stack: Stack) -> tuple[set, 
                 dirty.discard(register)
         if pushed is not None or popped is not None:
             return dirty, stack
-    if saved and long and _PUSH.fullmatch(target):
+    if saved and long and PUSH.fullmatch(target):
         stack = push(stack, width, None if saved in dirty else saved)
-    elif restored and long and _POP.fullmatch(source):
+    elif restored and long and POP.fullmatch(source):
         stack, held = pop(stack, width)
         dirty.add(restored)
         if held == restored:
@@ -269,9 +172,9 @@ def _execute(statement: Statement, dirty: set[str], stack: Stack) -> tuple[set, 
         # The frame fsave writes has no one size: frestore takes it off again.
         size = "the frame of fsave" if mnemonic in ("fsave", "frestore") else width
         for operand in operands:
-            if _PUSH.fullmatch(operand):
+            if PUSH.fullmatch(operand):
                 stack = push(stack, size)
-            elif _POP.fullmatch(operand):
+            elif POP.fullmatch(operand):
                 stack, _ = pop(stack, size)
         written = written_registers(statement)
         if STACK in written:
@@ -289,7 +192,7 @@ def _writes_into_stack(operand: str) -> bool:
 
     Writing there may overwrite a saved register. A push does not.
     """
-    return bool(_VIA_STACK.search(operand)) and not _PUSH.fullmatch(operand)
+    return bool(_VIA_STACK.search(operand)) and not PUSH.fullmatch(operand)
 
 
 def _link(stack: Stack, dirty: set[str], operands: tuple[str, ...]) -> Stack:
@@ -344,7 +247,7 @@ def successors(node: Node, choices: dict[str, bool]) -> list[int]:
     ``choices`` says which conditions of conditional assembly hold; a fork
     whose condition is not in it goes both ways.
     """
-    if node.kind != "fork" or node.condition not in choices:
+    if node.kind != Kind.FORK or node.condition not in choices:
         return node.successors
     holds = choices[node.condition] != node.negated
     wanted = [node.index + 1] if holds else node.jumps

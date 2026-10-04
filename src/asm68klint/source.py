@@ -1,7 +1,7 @@
 """Read assembly source into statements."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from asm68klint.findings import Finding
@@ -29,6 +29,10 @@ class Statement:
     macro: str | None = None
     expansion: int = 0
     is_macro_call: bool = False
+    # What ``m68k`` has worked out that the instruction writes and reads, kept
+    # for the next time it is asked.
+    written: frozenset[str] | None = field(default=None, repr=False, compare=False)
+    read: frozenset[str] | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_comment(self) -> bool:

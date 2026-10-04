@@ -16,6 +16,10 @@ class Finding:
     code: str
     message: str
 
+    def __post_init__(self) -> None:
+        if self.code not in RULES:
+            raise ValueError(f"{self.code!r} is not a rule")
+
     @property
     def severity(self) -> str:
         """The severity of the rule the finding belongs to."""

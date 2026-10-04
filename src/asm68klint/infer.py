@@ -9,21 +9,26 @@ jumped to from another routine: its code is then followed from there too
 (see ``build_graph``).
 """
 
-from asm68klint.directives import code_label, is_data
-from asm68klint.flow import direct_target
-from asm68klint.m68k import BRANCHES, LOOPS, is_instruction
+from asm68klint.directives import EXPORTS, code_label, is_data
+from asm68klint.m68k import (
+    BRANCHES,
+    CALLS,
+    JUMPS,
+    LOOPS,
+    RETURNS,
+    direct_target,
+    is_instruction,
+)
 from asm68klint.routines import Routine, find_routines
 from asm68klint.source import UNSCOPED, Statement, is_local, label_key
 
-CALLS = {"bsr", "jsr"}
-JUMPS = {"bra", "jmp"} | BRANCHES | LOOPS
-NO_FALL_THROUGH = {"bra", "jmp", "rts", "rte", "rtr", "rtd"}
-EXPORTS = ("xdef", "public", "global")
+BRANCHING = JUMPS | BRANCHES | LOOPS  # all that may go to a label
+NO_FALL_THROUGH = JUMPS | set(RETURNS)
 
 
 def target(statement: Statement) -> str | None:
     """Return the global label a call or jump goes to, if it names one."""
-    if not statement.operands or statement.mnemonic not in CALLS | JUMPS:
+    if not statement.operands or statement.mnemonic not in CALLS | BRANCHING:
         return None
     name = direct_target(statement.operands[-1])
     return name if name and place_label(name) else None
@@ -138,7 +143,7 @@ def _unreached(routine: Routine, code: set[str], foreign: set[str]) -> set[str]:
                 mnemonic = statement.mnemonic
                 if is_data(statement):
                     break
-                if mnemonic in JUMPS and statement.operands:
+                if mnemonic in BRANCHING and statement.operands:
                     name = direct_target(statement.operands[-1]) or ""
                     name = label_key(scopes[index], name)
                     if name in places:
