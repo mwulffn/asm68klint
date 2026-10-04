@@ -87,3 +87,16 @@ def test_the_command_and_json(source, capsys):
     assert "d1" in answer["in_use"]
     assert main(["--fix", "--infer", "main.s"]) == 0
     assert capsys.readouterr().out == "main.s: 2 headers written\n"
+
+
+LATIN = (
+    b";--\r\n; Foo\r\n; In:       -\r\n; Out:      -\r\n; Clobbers: d5\r\n"
+    b"Foo:\tmoveq\t#0,d0\t; r\xe6kke\r\n\trts\r\nName:\tdc.b\t'\xe6',0\r\n"
+)
+
+
+def test_fix_keeps_bytes_that_are_not_utf_8_and_the_line_endings(tmp_path: Path):
+    path = tmp_path / "latin.s"
+    path.write_bytes(LATIN)
+    assert fix_files([path]) == {str(path): 1}
+    assert path.read_bytes() == LATIN.replace(b"Clobbers: d5", b"Clobbers: d0")

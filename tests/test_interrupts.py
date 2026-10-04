@@ -75,3 +75,8 @@ Tick:
     assert lint(handler(body)) == [
         "main.s:9: error: interrupt handler VBlank must preserve d0"
     ]
+
+
+def test_an_interrupt_handler_whose_header_has_no_clobbers(lint):
+    source = ";--\n; Irq\n; In: -\n; Out: -\nIrq:\trte\n"
+    assert lint(source) == ["main.s:1: error: header of Irq has no Clobbers field"]

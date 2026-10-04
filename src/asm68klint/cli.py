@@ -30,8 +30,8 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="asm68klint",
         description=(
-            "Check the routine headers of 68000-family assembly source (vasm, Motorola"
-            " syntax) against what the code does to registers."
+            "Check the routine headers of 68000-family assembly source (Motorola"
+            " syntax or the GNU assembler's) against what the code does to registers."
         ),
     )
     parser.add_argument("files", nargs="*", type=Path, metavar="FILE")
@@ -166,7 +166,9 @@ def parse_arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         "--comment-column",
         type=int,
         metavar="N",
-        help="with --format: the column comments start in (default: 48)",
+        help=(
+            f"with --format: the column comments start in (default: {COMMENT_COLUMN})"
+        ),
     )
     parser.add_argument(
         "--fix",
@@ -216,51 +218,57 @@ def gather(options: argparse.Namespace) -> dict:
     return settings
 
 
-def run(options: argparse.Namespace) -> int:
-    """Lint as the options and the configuration file say."""
-    settings = gather(options)
-    column = options.comment_column or settings.pop("comment_column", COMMENT_COLUMN)
-    settings.pop("comment_column", None)
-    if options.format:
-        write = not (options.check or options.diff)
-        changed, passed, diff = format_files(options.files, column, write)
-        for file in passed:
-            print(f"{file}: not formatted: it is for the GNU assembler")
-        if options.diff:
-            print(*diff, sep="\n")
-        for file in () if options.diff else changed:
-            print(f"{file}: {'formatted' if write else 'would be formatted'}")
-        return 1 if changed and not write else 0
-    if options.effects or options.free or options.fix:
-        for name in ("select", "ignore", "extend_select"):
-            settings.pop(name, None)
-    if options.fix:
-        for file, count in sorted(fix_files(options.files, **settings).items()):
-            print(f"{file}: {count} header{'s' if count > 1 else ''} written")
-        return 0
-    if options.effects and options.json:
+def run_format(options: argparse.Namespace, column: int) -> int:
+    """Lay the files out, or with --check and --diff say what would change."""
+    write = not (options.check or options.diff)
+    changed, passed, diff = format_files(options.files, column, write)
+    for file in passed:
+        print(f"{file}: not formatted: it is for the GNU assembler")
+    if options.diff:
+        print(*diff, sep="\n")
+    for file in () if options.diff else changed:
+        print(f"{file}: {'formatted' if write else 'would be formatted'}")
+    return 1 if changed and not write else 0
+
+
+def run_fix(options: argparse.Namespace, settings: dict) -> int:
+    """Write the headers."""
+    for file, count in sorted(fix_files(options.files, **settings).items()):
+        print(f"{file}: {count} header{'s' if count > 1 else ''} written")
+    return 0
+
+
+def run_effects(options: argparse.Namespace, settings: dict) -> int:
+    """List what every routine reads and changes."""
+    if options.json:
         print(json.dumps(routine_effects(options.files, **settings), indent=1))
-        return 0
-    if options.effects:
+    else:
         print(*describe_files(options.files, **settings), sep="\n")
-        return 0
-    if options.free:
-        file, _, line = options.free.rpartition(":")
-        if not line.isdigit():
-            raise ValueError(f"{options.free!r} is not FILE:LINE")
-        found = free_registers(options.files, Path(file), int(line), **settings)
-        if found is None:
-            raise ValueError(f"{options.free} is in no routine of the files given")
-        title, free, busy = found
-        if options.json:
-            answer = {"routine": title, "free": sorted(free), "in_use": sorted(busy)}
-            print(json.dumps(answer))
-            return 0
+    return 0
+
+
+def run_free(options: argparse.Namespace, settings: dict) -> int:
+    """Say which registers new code at a line may use."""
+    file, _, line = options.free.rpartition(":")
+    if not line.isdigit():
+        raise ValueError(f"{options.free!r} is not FILE:LINE")
+    found = free_registers(options.files, Path(file), int(line), **settings)
+    if found is None:
+        raise ValueError(f"{options.free} is in no routine of the files given")
+    title, free, busy = found
+    if options.json:
+        answer = {"routine": title, "free": sorted(free), "in_use": sorted(busy)}
+        print(json.dumps(answer))
+    else:
         print(
             f"{options.free}: in {title}: free {format_list(free)};"
             f" in use {format_list(busy)}"
         )
-        return 0
+    return 0
+
+
+def run_lint(options: argparse.Namespace, settings: dict) -> int:
+    """Lint, and return 1 if there are errors."""
     findings = lint_files(options.files, **settings)
     if options.json:
         rows = [
@@ -270,6 +278,25 @@ def run(options: argparse.Namespace) -> int:
     for finding in () if options.json else findings:
         print(finding)
     return 1 if any(finding.severity == ERROR for finding in findings) else 0
+
+
+def run(options: argparse.Namespace) -> int:
+    """Do what the options and the configuration file say."""
+    settings = gather(options)
+    column = options.comment_column or settings.pop("comment_column", COMMENT_COLUMN)
+    settings.pop("comment_column", None)
+    if options.format:
+        return run_format(options, column)
+    if options.effects or options.free or options.fix:
+        for name in ("select", "ignore", "extend_select"):
+            settings.pop(name, None)
+    if options.fix:
+        return run_fix(options, settings)
+    if options.effects:
+        return run_effects(options, settings)
+    if options.free:
+        return run_free(options, settings)
+    return run_lint(options, settings)
 
 
 def main(arguments: Sequence[str] | None = None) -> int:

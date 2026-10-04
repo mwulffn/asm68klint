@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from asm68klint import lint_files
 from asm68klint.cli import main
-from asm68klint.format import format_line, format_text, operand_end, width
+from asm68klint.format import format_files, format_line, format_text, operand_end, width
 
 MESSY = """\
 * A program written with little care for columns
@@ -180,3 +181,20 @@ def test_the_command(tmp_path: Path, monkeypatch, capsys):
     Path("asm68klint.toml").write_text("comment-column = 32\n")
     assert main(["--format", "--check", "a.s"]) == 1
     assert main(["--format", "--check", "--comment-column", "48", "a.s"]) == 0
+
+
+LATIN = (
+    b";--\r\n; Foo\r\n; In:       -\r\n; Out:      -\r\n; Clobbers: d5\r\n"
+    b"Foo:\tmoveq\t#0,d0\t; r\xe6kke\r\n\trts\r\nName:\tdc.b\t'\xe6',0\r\n"
+)
+
+
+def test_format_keeps_bytes_that_are_not_utf_8_and_the_line_endings(tmp_path: Path):
+    path = tmp_path / "latin.s"
+    path.write_bytes(LATIN.replace(b"Foo:\tmoveq\t#0,d0\t;", b"Foo:  MOVEQ #0,D0 ;"))
+    assert format_files([path])[0] == [str(path)]
+    after = path.read_bytes()
+    assert b"Foo:\tmoveq\t#0,d0\t\t\t\t; r\xe6kke\r\n" in after
+    assert b"'\xe6',0\r\n" in after
+    assert after.count(b"\r\n") == LATIN.count(b"\r\n")
+    assert lint_files([path], select=["S"]) == []
