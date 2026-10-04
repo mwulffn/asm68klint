@@ -1,5 +1,7 @@
 # asm68klint
 
+[![CI](https://github.com/mwulffn/asm68klint/actions/workflows/ci.yml/badge.svg)](https://github.com/mwulffn/asm68klint/actions/workflows/ci.yml)
+
 A linter for hand-written assembly for the Motorola 68000 family. It follows
 what every routine does to the registers and the stack, and checks that
 against the routine's header comment: what it takes, what it gives back,
