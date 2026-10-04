@@ -332,15 +332,27 @@ field		rs.w	1
 Only blanks and case are changed. Each line is read again after it is
 laid out, and kept as it was unless label, instruction, operands and
 comment are the same as before. Tried by assembling before and after:
-ProTracker's source (26,737 lines, of which 21,814 changed) and the
-Galaga port's give the same bytes. Source for the GNU assembler is passed
-over.
+ProTracker's source (26,737 lines, of which 21,814 changed) and that of
+an Amiga game (9,700 lines) give the same bytes. Source for the GNU
+assembler is passed over.
+
+## Installing it
+
+It needs Python 3.11 or later and nothing else.
+
+```
+uv tool install git+https://github.com/mwulffn/asm68klint
+pip install git+https://github.com/mwulffn/asm68klint      # or with pip
+```
+
+That gives the command `asm68klint`. In a checkout of this repository,
+`uv run asm68klint` does the same without installing.
 
 ## Running it
 
 ```
-uv run asm68klint [options] FILE...
-uv run asm68klint --rules
+asm68klint [options] FILE...
+asm68klint --rules
 ```
 
 Give all the source files of the program in one run, so that calls across

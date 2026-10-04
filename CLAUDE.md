@@ -1,10 +1,9 @@
 # asm68klint
 
 A linter for hand-written assembly for the Motorola 68000 family, in the
-spirit of ruff: rules with codes, a configuration file, fixes. It began as
-`asmlint` inside the Galaga port for the Amiga (`../Galaga-port`), where the
-build runs the old copy; it was moved here on 2026-10-03 to be a tool of
-its own. `README.md` is the manual: keep it true.
+spirit of ruff: rules with codes, a configuration file, fixes. It began
+inside a port of an arcade game to the Amiga and became a tool of its own.
+`README.md` is the manual: keep it true.
 
 ## Why it exists
 
@@ -12,10 +11,9 @@ A routine's header (`In`, `Out`, `Clobbers`) is a contract that the linter
 proves against the code. That makes the headers safe to reason from: a
 person or a language model writing a new routine reads three lines per
 routine it calls, not the bodies, and sees which registers are in use.
-Features are judged by that use first (the user, 2026-10-03: "the value
-[is] that the llm can see what is in use while writing new functions").
+Features are judged by that use first.
 
-## Decisions (the user's, 2026-10-03)
+## Decisions
 
 - **MIT licence.**
 - **Processors:** 68000 to 68060 and the floating point unit with its
@@ -29,8 +27,6 @@ Features are judged by that use first (the user, 2026-10-03: "the value
   learn; what is learnt becomes a test of a few lines written for it
   (`tests/test_found_in_the_wild.py`, `tests/test_gas.py`).
   `tools/corpus.py` is the tally that was used.
-- The Galaga port keeps its own `asmlint/` until the user says otherwise.
-  This tool is not to change anything there.
 
 ## How it is put together
 
@@ -41,13 +37,16 @@ Features are judged by that use first (the user, 2026-10-03: "the value
 | `directives.py` | which directives are data, conditionals, nothing; which conditionals can be decided |
 | `m68k.py`, `registers.py` | **everything that depends on the processor**: what each instruction writes and reads, which processor has it, register names and lists |
 | `header.py`, `routines.py`, `infer.py` | headers; splitting a file into routines; where routines without headers start |
+| `model.py` | what a graph is made of: `Node`, `Call`, `Effect`, the kinds of node and of exit |
 | `graph.py`, `tables.py` | a routine's control-flow graph: calls, jumps, jump tables, code borrowed from a routine jumped into |
 | `flow.py` | forward over the graph: which registers are changed, what is on the stack |
 | `reads.py` | forward: registers read while they hold nothing; backward: which are still needed (free registers) |
-| `linter.py` | the checks, inference in rounds (`settle`), effects, free registers |
+| `checks.py` | the checks of one routine against its header |
+| `units.py` | the files of a run, their routines and graphs; inference in rounds (`settle`) |
+| `linter.py` | what is called from outside: lint, effects, free registers; `lint: ignore` |
 | `values.py`, `style.py` | the values of names (`equ`, `rs` fields) for the default build; the style rules (`T`, off unless selected) |
 | `format.py` | the formatter: blanks and case only, each line read again before it is kept |
-| `platforms.py`, `options.py`, `config.py`, `rules.py`, `fix.py`, `cli.py` | what their names say |
+| `platforms.py`, `options.py`, `config.py`, `rules.py`, `findings.py`, `annotations.py`, `fix.py`, `cli.py` | what their names say |
 
 ## Rules of the house
 
@@ -59,19 +58,17 @@ Features are judged by that use first (the user, 2026-10-03: "the value
 - New read rules start as warnings. Style rules are off by default.
 - The formatter is proved by assembling before and after and comparing
   the bytes (a test does it with vasm on a messy sample; ProTracker's
-  26,737 lines and the Galaga port were done by hand, 2026-10-03). Do
-  that again after changing it.
-- The odd-field rule (T002) was compared with the Galaga port's own
-  checker, which asks vasm: with a field moved to an odd offset both name
-  the same 52 fields.
-- No runtime dependencies. Python by `uv`; `uv run pytest`,
+  26,737 lines and the game's source were done by hand). Do that again
+  after changing it.
+- The odd-field rule (T002) was compared with a checker that asks vasm:
+  with a field moved to an odd offset both name the same 52 fields.
+- No runtime dependencies. Python 3.11 or later, by `uv`; `uv run pytest`,
   `uv run ruff format .`, `uv run ruff check .`.
-- The Galaga port's sources are the regression check for headers: 26
-  files, 168 routines, clean under every rule. From
-  `../Galaga-port/game`, after a `make`:
-  `uv run --project ../../asm68klint asm68klint -I include -I build --cpu 68000 src/*.s`
+- The game's sources (not public) are the regression check for headers:
+  26 files, 168 routines, clean under every rule. A change that is meant
+  to change nothing gives the same output there, byte for byte.
 
-## What public code showed (2026-10-03)
+## What public code showed
 
 About 700,000 lines were linted with `--infer`: an Amiga module player
 (188,000 lines, AsmOne style), ProTracker, a demo, an emulator's test
@@ -104,7 +101,7 @@ routines whose callees changed.
   banner dividers, operating system calls outside one file, data in the
   wrong kind of section.
 - The formatter does not touch source for the GNU assembler, and has one
-  layout (the Galaga port's) with one setting, the comment column.
+  layout with one setting, the comment column.
 - What code called inside a routine reads is not checked against `In`.
 - Branches to `*+N` other than the conditional return (`beq.s *+4` over a
   one-word instruction): they need the length of instructions.

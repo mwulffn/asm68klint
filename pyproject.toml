@@ -6,10 +6,25 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "Michael Wulff Nielsen", email = "mwulff@gmail.com" }
+    { name = "Michael Wulff Nielsen", email = "michael@hypermail.dk" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
+keywords = ["68000", "m68k", "assembly", "linter", "amiga", "atari", "vasm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Assembly",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Assemblers",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/mwulffn/asm68klint"
+Issues = "https://github.com/mwulffn/asm68klint/issues"
 
 [project.scripts]
 asm68klint = "asm68klint.cli:main"
